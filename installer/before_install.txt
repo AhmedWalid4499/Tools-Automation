@@ -1,0 +1,33 @@
+Before you install GOLD Express
+
+GOLD Express was created by Ahmed El-Bourgy.
+Copyright (c) 2026 Ahmed El-Bourgy. All rights reserved.
+
+What you need
+  - Mozilla Firefox installed on this computer.
+    GOLD Express drives Firefox hidden in the background to work with GOLD.
+  - Your normal GOLD access with your Orange account.
+    Sign-in happens automatically (SSO). If GOLD ever asks you to sign in by hand,
+    GOLD Express opens the Firefox window for you.
+  - If the network drops, GOLD Express reconnects to GOLD by itself when it is back.
+  - No administrator rights are needed - GOLD Express installs just for you.
+
+What GOLD Express does
+  - Overview: key facts of one or more orders (project, scope, STM, site, target
+    dates, order value) with Red / Amber / Green delivery and 120-day lead-time
+    status, exportable to Excel.
+  - Order explorer: open any GOLD order, browse its tabs, take screenshots,
+    download documents, see order teams and export tab data to Excel.
+  - Revised Target Date: add the "Revised Target Date" milestone (Customer or
+    Orange Business Services reason) to many orders at once from a table you
+    type, paste from Excel or load from a file. "Test only" lets you try first
+    without saving anything.
+  - Bulk Order Assignment: make a DPM the primary STM of many orders at once,
+    picked from the DPM Names list (which you can add to and edit).
+
+Good to know
+  - GOLD Express only changes GOLD when you click "Run update" on the
+    Revised Target Date or Bulk Order Assignment tab and confirm.
+    Everything else only reads GOLD.
+  - Your settings, screenshots and exports are kept in Documents\GOLD Express.
+    Uninstalling the app does not delete them.
