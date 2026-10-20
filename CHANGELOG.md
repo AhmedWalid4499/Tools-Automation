@@ -1,5 +1,9 @@
 # GOLD Express - what's new
 
+## 1.5.1
+- The update check now works reliably on shared office networks (it no longer depends on GitHub's
+  limited API), and shows the release notes instantly.
+
 ## 1.5.0
 - **Updates from inside the app**: GOLD Express checks for new versions at start-up. When one is
   available the "Update" button in the top bar turns orange - one click downloads it, updates the

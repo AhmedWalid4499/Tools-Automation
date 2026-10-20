@@ -322,6 +322,16 @@ class App(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _offer_update(self, rel):
+        if getattr(self, "_updating", False):
+            return  # an update is already being offered / downloaded
+        self._updating = True
+        try:
+            self._offer_update_now(rel)
+        finally:
+            if not self.busy:  # not downloading: allow another try later
+                self._updating = False
+
+    def _offer_update_now(self, rel):
         notes = rel["notes"][:900] + ("..." if len(rel["notes"]) > 900 else "")
         if not gu.can_self_update():
             messagebox.showinfo(APP_NAME, f"Version {rel['version']} is available.\n\nThis copy runs from the "
