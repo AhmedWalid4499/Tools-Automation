@@ -22,3 +22,6 @@ geckodriver.exe
 __pycache__/
 *.pyc
 .venv/
+
+# AI key files must never be committed
+*.key

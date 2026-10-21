@@ -14,6 +14,11 @@ a hidden Firefox window, so routine order work takes a few clicks instead of man
 | **Revised Target Date** | Add the "Revised Target Date" milestone (Customer or Orange Business Services reason) to many orders at once. |
 | **Bulk Order Assignment** | Make a DPM the primary STM of many orders at once. |
 | **DPM Names** | Manage the DPM list used by Bulk Order Assignment, and check names in GOLD. |
+| **Ask GOLD** | Chat assistant (Claude): ask about deadlines, pricing, site address, people or notes of any order; answers come as tables and lists, read live from GOLD. |
+
+Ask GOLD needs the team's AI key file (`salto-buddy-team.key`, shared through the team's SharePoint
+folder). The key is never part of the app or this repository: GOLD Express reads it at run time from
+the synced OneDrive folder, or from the file chosen in Settings > AI assistant.
 
 GOLD Express only changes GOLD when you click **Run update** on the Revised Target Date or Bulk Order
 Assignment tab and confirm; everything else only reads GOLD. Both have a **Test only** mode.
@@ -30,7 +35,7 @@ app's top bar turns orange.
 ## For developers
 
 ```
-pip install selenium openpyxl pillow pyinstaller
+pip install selenium openpyxl pillow anthropic pyinstaller
 python gold_app.py                    # run from source
 python build_release.py               # build release\GOLD_Express_Setup_<version>.exe (needs Inno Setup 6)
 python build_release.py --publish     # ...and publish it as a GitHub release (needs: gh auth login)
@@ -50,6 +55,7 @@ To release a new version: bump `__version__` in `version.py`, add a section to `
 | `gold_names.py` | DPM names list |
 | `gold_grid.py` | Excel-like editable table |
 | `gold_update.py` | Updates from GitHub Releases |
+| `gold_ai.py`, `gold_markdown.py` | Ask GOLD: Claude conversation with read-only GOLD tools, answer rendering |
 | `installer/` | Inno Setup wizard |
 
 The built-in DPM names list (`data/dpm_names_default.json`) is kept out of this repository and packed

@@ -23,7 +23,9 @@ from tkinter import filedialog, messagebox, ttk
 
 from selenium.webdriver.support.ui import WebDriverWait
 
+import gold_ai as gai
 import gold_extract as gx
+import gold_markdown as gmd
 import gold_milestones as gm
 import gold_names as gn
 import gold_overview as go
@@ -60,7 +62,7 @@ def safe_name(s):
 def load_settings():
     s = {"screenshots": str(HERE / "output" / "screenshots"), "exports": str(HERE / "output"),
          "full_page": True, "auto_shot": False, "per_order_folder": True, "show_browser": False,
-         "parallel_sessions": True}
+         "parallel_sessions": True, "ai_key_file": ""}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -304,6 +306,8 @@ class App(tk.Tk):
         self.per_order = tk.BooleanVar(value=self.settings["per_order_folder"])
         self.show_browser = tk.BooleanVar(value=self.settings["show_browser"])
         self.parallel = tk.BooleanVar(value=self.settings["parallel_sessions"])
+        self.ai_key_file = tk.StringVar(value=self.settings["ai_key_file"])
+        self.chat = None           # Ask GOLD conversation (gold_ai.Chat)
 
         self._style()
         self._build()
@@ -629,12 +633,15 @@ class App(tk.Tk):
         self.notebook.add(assign, text="Bulk Order Assignment")
         names = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
         self.notebook.add(names, text="DPM Names")
+        ask = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
+        self.notebook.add(ask, text="✦ Ask GOLD")
         self.bulk_stop_flag = threading.Event()
         self._build_overview_tab(overview)
         self._build_explorer(explorer)
         self._build_rtdd_tab(rtdd)
         self._build_assign_tab(assign)
         self._build_names_tab(names)
+        self._build_ask_tab(ask)
         self._refresh_action_state()
 
     def _toggle_log(self):
@@ -737,7 +744,30 @@ class App(tk.Tk):
                         variable=self.parallel, style="Card.TCheckbutton").grid(
             row=9, column=0, columnspan=4, sticky="w", pady=2)
 
+        ttk.Label(body, text="AI assistant (Ask GOLD)", style="CardHead.TLabel").grid(
+            row=10, column=0, sticky="w", columnspan=4, pady=(16, 2))
+        ttk.Label(body, text="Key file", style="Card.TLabel").grid(row=11, column=0, sticky="w", pady=4)
+        ttk.Entry(body, textvariable=self.ai_key_file, width=62).grid(row=11, column=1, sticky="ew", padx=8)
+        key_state = ttk.Label(body, style="CardMuted.TLabel", font=(FONT, 8))
+        key_state.grid(row=12, column=1, columnspan=3, sticky="w", padx=8)
+
+        def show_key_state(*_):
+            if not key_state.winfo_exists():
+                return
+            found = gai.find_key_file(self.ai_key_file.get().strip())
+            key_state.configure(text=f"Using {found}" if found else
+                                f"Not found - leave empty to find {gai.KEY_FILE_NAME} in your synced "
+                                "OneDrive folders, or choose the file")
+        ttk.Button(body, text="Browse...", command=lambda: (self._browse_key(), show_key_state())).grid(
+            row=11, column=2)
+        key_trace = self.ai_key_file.trace_add("write", show_key_state)
+        show_key_state()
+        old_key = self.ai_key_file.get()
+
         def close():
+            self.ai_key_file.trace_remove("write", key_trace)
+            if self.ai_key_file.get() != old_key:
+                self.chat = None  # the next question uses the new key file
             self._store_settings()
             if self.show_browser.get() != was_shown and self.worker.driver is not None:
                 self.worker.restart = True
@@ -746,7 +776,7 @@ class App(tk.Tk):
             win.destroy()
 
         btns = ttk.Frame(body, style="Card.TFrame")
-        btns.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(18, 0))
+        btns.grid(row=13, column=0, columnspan=4, sticky="ew", pady=(18, 0))
         ttk.Label(btns, text=f"{APP_NAME} {__version__}  ·  \u00a9 2026 {AUTHOR}  ·  data folder: {HERE}",
                   style="CardMuted.TLabel", font=(FONT, 8)).pack(side="left")
         ttk.Button(btns, text="Done", style="Accent.TButton", command=close).pack(side="right")
@@ -1568,6 +1598,146 @@ class App(tk.Tk):
 
         w.submit(f"Checking {len(entries)} name(s) in GOLD", job, done)
 
+    # ----- Ask GOLD tab (AI assistant)
+    ASK_EXAMPLES = ("What are the deadlines of 10-1234567?",
+                    "Show the pricing details of 10-1234567",
+                    "What is the site address and who is the STM for 10-1234567?",
+                    "Compare the delivery status of 10-1234567 and 10-7654321")
+
+    def _build_ask_tab(self, f):
+        top = tk.Frame(f, background=CARD)
+        top.pack(fill="x")
+        ttk.Label(top, text="Ask anything about your GOLD orders - deadlines, pricing, site address, "
+                            "people, notes. The assistant reads GOLD for you (it never changes anything).",
+                  style="Muted.TLabel", wraplength=860, justify="left").pack(side="left", anchor="w")
+        self._btn(top, "New chat", self._ask_new).pack(side="right")
+        self._btn(top, "Copy answer", self._ask_copy).pack(side="right", padx=6)
+
+        box = tk.Frame(f, background=CARD, highlightthickness=1, highlightbackground=LINE)
+        box.pack(fill="both", expand=True, pady=(10, 8))
+        self.ask_text = tk.Text(box, wrap="word", relief="flat", background=CARD, foreground=INK,
+                                padx=16, pady=12, cursor="arrow", state="disabled", font=(FONT, 10))
+        sb = ttk.Scrollbar(box, orient="vertical", command=self.ask_text.yview)
+        self.ask_text.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.ask_text.pack(side="left", fill="both", expand=True)
+        gmd.setup(self.ask_text, font=FONT, ink=INK, muted=MUTED, accent=ORANGE, soft=ORANGE_SOFT, line=LINE)
+        self.ask_text.tag_configure("you", font=(FONT, 10, "bold"), foreground=INK, background="#F3F4F6",
+                                    lmargin1=4, lmargin2=4, rmargin=4, spacing1=14, spacing3=8)
+        self.ask_text.tag_configure("who", font=(FONT, 8, "bold"), foreground=ORANGE, spacing1=10)
+        self.ask_text.tag_configure("err", foreground=RED, font=(FONT, 10))
+        self.ask_text.tag_configure("hint", foreground=MUTED, font=(FONT, 10))
+        self.ask_text.tag_configure("example", foreground=ORANGE, font=(FONT, 10, "underline"),
+                                    lmargin1=16, spacing1=3)
+        self.ask_text.tag_bind("example", "<Enter>", lambda e: self.ask_text.configure(cursor="hand2"))
+        self.ask_text.tag_bind("example", "<Leave>", lambda e: self.ask_text.configure(cursor="arrow"))
+        # Mouse wheel over embedded tables scrolls the chat
+        self.ask_text.bind_all("<MouseWheel>", self._ask_wheel, add="+")
+
+        bar = tk.Frame(f, background=CARD)
+        bar.pack(fill="x")
+        self.ask_input = tk.Text(bar, height=3, wrap="word", font=(FONT, 11), relief="flat", padx=10, pady=8,
+                                 background="#FAFAFA", foreground=INK, highlightthickness=1,
+                                 highlightbackground=LINE, highlightcolor=ORANGE, insertbackground=INK)
+        self.ask_input.pack(side="left", fill="x", expand=True)
+        self.ask_input.bind("<Return>", lambda e: (self._ask_send(), "break")[1])
+        self.ask_input.bind("<Shift-Return>", lambda e: None)
+        self.ask_send_btn = self._btn(bar, "Ask  ➤", self._ask_send, "Accent.TButton")
+        self.ask_send_btn.pack(side="left", padx=(10, 0), fill="y")
+        self.ask_status = ttk.Label(f, text="Enter to send · Shift+Enter for a new line", style="Muted.TLabel",
+                                    font=(FONT, 8))
+        self.ask_status.pack(anchor="w", pady=(4, 0))
+        self.ask_last = ""  # last answer (markdown) for Copy
+        self._ask_welcome()
+
+    def _ask_wheel(self, e):
+        w = e.widget
+        while w is not None and w is not self.ask_text:
+            w = getattr(w, "master", None)
+        if w is self.ask_text and e.widget is not self.ask_text:
+            self.ask_text.yview_scroll(int(-e.delta / 120), "units")
+
+    def _ask_write(self, fn):
+        t = self.ask_text
+        t.configure(state="normal")
+        fn(t)
+        t.configure(state="disabled")
+        t.see("end")
+
+    def _ask_welcome(self):
+        def write(t):
+            t.insert("end", "Hi! Ask me about any GOLD order. For example (click one, then put in "
+                            "your order number):\n", ("hint",))
+            for i, q in enumerate(self.ASK_EXAMPLES):
+                tag = f"ex{i}"
+                t.insert("end", q + "\n", ("example", tag))
+                t.tag_bind(tag, "<Button-1>", lambda e, q=q: self._ask_example(q))
+        self._ask_write(write)
+
+    def _ask_example(self, q):
+        self.ask_input.delete("1.0", "end")
+        self.ask_input.insert("1.0", q)
+        self.ask_input.focus_set()
+
+    def _ask_new(self):
+        if self.busy:
+            return
+        if self.chat:
+            self.chat.messages.clear()
+        self.ask_last = ""
+        self._ask_write(lambda t: t.delete("1.0", "end"))
+        for w in self.ask_text.winfo_children():
+            w.destroy()
+        self._ask_welcome()
+
+    def _ask_copy(self):
+        if self.ask_last:
+            self.clipboard_clear()
+            self.clipboard_append(self.ask_last)
+            self.log("Answer copied.")
+
+    def _ask_send(self):
+        question = self.ask_input.get("1.0", "end").strip()
+        if not question or self.busy:
+            return
+        if self.chat is None:
+            try:
+                key = gai.load_key(gai.find_key_file(self.ai_key_file.get().strip()))
+                self.chat = gai.Chat(key, gai.GoldReader(self))
+            except Exception as e:
+                self._ask_write(lambda t: t.insert("end", "\n" + str(e) + "\n", ("err",)))
+                return
+        self.ask_input.delete("1.0", "end")
+        if not self.chat.messages:
+            self._ask_write(lambda t: (t.delete("1.0", "end"), [w.destroy() for w in t.winfo_children()]))
+        self._ask_write(lambda t: t.insert("end", question + "\n", ("you",)))
+        self.ask_status.configure(text="Thinking...")
+        chat = self.chat
+
+        def progress(text):
+            self.ui(lambda: self.ask_status.configure(text=text))
+
+        def job():
+            try:
+                return True, chat.ask(question, progress)
+            except Exception as e:  # shown in the chat, not as a pop-up
+                (HERE / "gold_app_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+                return False, gai.friendly_error(e)
+
+        def done(result):
+            ok, answer = result
+            self.ask_status.configure(text="Enter to send · Shift+Enter for a new line")
+            width = max(500, self.ask_text.winfo_width() - 40)
+            if ok:
+                self.ask_last = answer
+                self._ask_write(lambda t: (t.insert("end", "ASK GOLD\n", ("who",)),
+                                           gmd.render(t, answer, width)))
+            else:
+                self._ask_write(lambda t: t.insert("end", answer + "\n", ("err",)))
+            self.ask_input.focus_set()
+
+        self.worker.submit("Asking GOLD", job, done)
+
     def _build_text_view(self):
         f = self.text_view = ttk.Frame(self.content)
         self.text = tk.Text(f, wrap="word", font=("Segoe UI", 10), relief="flat",
@@ -1651,13 +1821,23 @@ class App(tk.Tk):
     def _store_settings(self):
         self.settings.update(screenshots=self.shot_dir.get(), exports=self.export_dir.get(),
                              full_page=self.full_page.get(), auto_shot=self.auto_shot.get(),
-                             per_order_folder=self.per_order.get(), parallel_sessions=self.parallel.get())
+                             per_order_folder=self.per_order.get(), parallel_sessions=self.parallel.get(),
+                             ai_key_file=self.ai_key_file.get())
         save_settings(self.settings)
 
     def _browse(self, var):
         d = filedialog.askdirectory(initialdir=var.get() or str(HERE), title="Choose folder")
         if d:
             var.set(d)
+            self._store_settings()
+
+    def _browse_key(self):
+        start = Path(self.ai_key_file.get()).parent if self.ai_key_file.get() else Path.home()
+        p = filedialog.askopenfilename(initialdir=str(start), title="Choose the AI key file",
+                                       filetypes=[("Key file", "*.key"), ("All files", "*.*")])
+        if p:
+            self.ai_key_file.set(p)
+            self.chat = None  # the next question uses the new key
             self._store_settings()
 
     def _open_folder(self, path):
@@ -2014,11 +2194,28 @@ def selftest(order):
         report.write_text("\n".join(lines), encoding="utf-8")
 
 
+def ask_selftest():
+    """GOLD Express.exe --ask-selftest : check the AI key file and the AI service (no GOLD)."""
+    lines = []
+    try:
+        path = gai.find_key_file(load_settings().get("ai_key_file", ""))
+        lines.append(f"Key file: {path}")
+        chat = gai.Chat(gai.load_key(path), reader=None)
+        answer = chat.ask("This is a connection test. Reply with just: OK")
+        lines.append(f"Answer: {answer}")
+        lines.append("RESULT: OK")
+    except Exception as e:
+        lines.append(f"RESULT: FAILED - {gai.friendly_error(e)}\n" + traceback.format_exc())
+    (HERE / "ask_selftest_report.txt").write_text("\n".join(lines), encoding="utf-8")
+
+
 if __name__ == "__main__":
     import sys
     HERE.mkdir(parents=True, exist_ok=True)
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         selftest(sys.argv[2])
+    elif len(sys.argv) >= 2 and sys.argv[1] == "--ask-selftest":
+        ask_selftest()
     else:
         # One GOLD Express at a time: two copies can't share the Firefox profile.
         import ctypes

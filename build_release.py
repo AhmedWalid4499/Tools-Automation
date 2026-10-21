@@ -126,6 +126,7 @@ def build_app():
         "--add-data", f"{HERE / 'gold_express.ico'};.",
         *(["--add-data", f"{NAMES_DEFAULT};."] if NAMES_DEFAULT.exists() else []),
         "--collect-submodules", "selenium",
+        "--collect-submodules", "anthropic",  # Ask GOLD (imported when the first question is sent)
         "--workpath", str(BUILD / "work"), "--specpath", str(BUILD), "--distpath", str(BUILD / "dist"),
         str(HERE / "gold_app.py"),
     ], check=True)

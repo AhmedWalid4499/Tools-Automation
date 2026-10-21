@@ -1,5 +1,13 @@
 # GOLD Express - what's new
 
+## 1.7.0
+- New **Ask GOLD** tab: an AI assistant (Claude) for your orders. Ask in plain words - "what are the
+  deadlines of 10-1771012?", "show the pricing details", "site address and STM?", "compare these
+  two orders" - and it reads GOLD for you and answers with tables and lists. Follow-up questions
+  remember the order. Right-click a table to copy it into Excel. It only reads GOLD, never changes it.
+- Uses the team's AI key file (synced from the team SharePoint folder); choose another one in
+  Settings > AI assistant.
+
 ## 1.6.0
 - **Much faster.** Opening an order takes about 5 seconds instead of 25-45, tabs open in 1-3 seconds,
   and Teams / Documents appear instantly. GOLD Express signs in to GOLD in the background as soon
