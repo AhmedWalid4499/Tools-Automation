@@ -22,7 +22,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from open_gold import DOWNLOAD_DIR, GOLD_URL, OUT_DIR, start_firefox, wait_for_gold
+from open_gold import Wait, dismiss_splash, page_text, DOWNLOAD_DIR, GOLD_URL, OUT_DIR, start_firefox, wait_for_gold
 
 # Order side-menu items call jumpTo('...'); the main menu ones call tryJumpTo(...).
 ORDER_TAB_XPATH = "//tr[@title]/td[contains(@onclick, \"jumpTo('\")]"
@@ -41,7 +41,7 @@ def _leave_prompt(driver, discard_changes):
     text = alert.text
     if discard_changes:
         alert.accept()
-        time.sleep(1)
+        time.sleep(0.3)
     else:
         alert.dismiss()
         raise RuntimeError(f"GOLD says the order has unsaved changes: {text.strip()}")
@@ -52,10 +52,20 @@ def open_orders_tab(driver, wait, discard_changes=False):
     order, so then use the left menu's 'All orders'."""
     if driver.find_elements(By.ID, "orderNb"):
         return
+    dismiss_splash(driver)  # GOLD's announcement pop-up would block the click
+    all_orders = driver.find_elements(By.XPATH, "//tr[@title='All orders']/td")
+    if all_orders:  # inside an order: its left menu goes straight to the search page
+        all_orders[0].click()
+        _leave_prompt(driver, discard_changes)
+        try:
+            Wait(driver, 30).until(EC.presence_of_element_located((By.ID, "orderNb")))
+            return
+        except Exception:
+            pass
     driver.find_element(By.XPATH, "//ul[@id='headMenu']//a[normalize-space()='Orders']").click()
     _leave_prompt(driver, discard_changes)
     try:
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "orderNb")))
+        Wait(driver, 10).until(EC.presence_of_element_located((By.ID, "orderNb")))
         return
     except Exception:
         pass
@@ -78,7 +88,7 @@ def search_order(driver, wait, order_nb):
     # The page reloads with new results: wait for the old page to go, so we don't read
     # rows (or "0 orders listed") from the previous search.
     try:
-        WebDriverWait(driver, 30).until(EC.staleness_of(old_page))
+        Wait(driver, 30).until(EC.staleness_of(old_page))
     except Exception:
         pass
     row_xpath = f"{GRID_ROWS_XPATH}[td[normalize-space()='{order_nb}']]"
@@ -86,27 +96,23 @@ def search_order(driver, wait, order_nb):
     def found_or_empty(d):
         if d.find_elements(By.XPATH, row_xpath):
             return "found"
-        text = d.find_element(By.TAG_NAME, "body").text.lower()
+        text = page_text(d).lower()
         if "0 orders listed" in text or "no orders" in text or "orders were found" in text:
             return "empty"
         if d.find_elements(By.ID, "GridTableBody") and "orders listed" in text:
             return "empty"  # results are shown, but not this order
         return False
     try:
-        result = WebDriverWait(driver, 60).until(found_or_empty)
+        result = Wait(driver, 60).until(found_or_empty)
     except Exception:
         result = "empty"
     if result == "empty":
         raise RuntimeError(f"order {order_nb} was not found in GOLD")
-    time.sleep(0.5)
     return wait.until(EC.element_to_be_clickable((By.XPATH, row_xpath)))
 
 
 def _on_order_page(driver, order_nb):
-    try:
-        return f"order # : {order_nb}" in driver.find_element(By.TAG_NAME, "body").text
-    except Exception:
-        return False
+    return f"order # : {order_nb}" in page_text(driver)
 
 
 def open_result(driver, wait, row, order_nb):
@@ -125,13 +131,11 @@ def open_result(driver, wait, row, order_nb):
         except Exception:
             pass  # page already changing under us
         try:
-            WebDriverWait(driver, 20).until(lambda d: _on_order_page(d, order_nb))
-            time.sleep(1)
+            Wait(driver, 20).until(lambda d: _on_order_page(d, order_nb))
             return
         except Exception:
             if not driver.find_elements(By.XPATH, row_xpath):
                 wait.until(lambda d: _on_order_page(d, order_nb))  # still loading the order
-                time.sleep(1)
                 return
     raise RuntimeError(f"Could not open order {order_nb} from the search results")
 
@@ -150,6 +154,8 @@ def open_tab(driver, wait, title):
     base = re.sub(r"\s*\[\d+\]$", "", title)  # "Documents [12]" -> "Documents"
     xpath = f"//tr[starts-with(@title, '{base}')]/td"
     td = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))  # page may still be drawing
+    if "Selected" in (td.get_attribute("class") or ""):
+        return base  # already showing this tab: no need to reload it
     td.click()
     # Page reloads; the clicked item becomes the selected one.
     wait.until(EC.staleness_of(td))
@@ -160,7 +166,6 @@ def open_tab(driver, wait, title):
         except (NoSuchElementException, StaleElementReferenceException):
             return False
     wait.until(selected)
-    time.sleep(1)
     return base
 
 
@@ -204,14 +209,22 @@ def screenshot(driver, folder, name):
 
 # ---------- Documents ----------
 
+# Read the whole Documents grid in ONE browser call (cell by cell was hundreds of calls).
+READ_DOCUMENTS_JS = """
+const out = [];
+for (const tr of document.querySelectorAll('#GridTableBody > tr')) {
+  const cells = [...tr.cells].slice(2).map(td => td.innerText.trim());
+  if (cells.length) out.push([tr.getAttribute('itemkey'), cells]);
+}
+return out;
+"""
+
+
 def read_documents(driver):
     docs = []
-    for row in driver.find_elements(By.XPATH, GRID_ROWS_XPATH):
-        cells = [c.text.strip() for c in row.find_elements(By.TAG_NAME, "td")[2:]]
-        if cells:
-            docs.append({"key": row.get_attribute("itemkey"), "title": cells[0],
-                         "modified": cells[1], "type": cells[2],
-                         "srf": cells[3] if len(cells) > 3 else ""})
+    for key, cells in driver.execute_script(READ_DOCUMENTS_JS):
+        docs.append({"key": key, "title": cells[0], "modified": cells[1] if len(cells) > 1 else "",
+                     "type": cells[2] if len(cells) > 2 else "", "srf": cells[3] if len(cells) > 3 else ""})
     return docs
 
 
@@ -240,20 +253,20 @@ def download_document(driver, wait, doc, dest_dir, timeout=60):
     for _ in range(3):  # the grid sometimes ignores the first double-click after a reload
         try:
             # The list can reload right after it first appears, so wait for the row.
-            row = WebDriverWait(driver, 20).until(
+            row = Wait(driver, 20).until(
                 EC.presence_of_element_located((By.XPATH, row_xpath)))
             cell = row.find_elements(By.TAG_NAME, "td")[2]
             # Clicking selects the row; clicking an already-selected row opens it.
             cell.click()
             try:
-                WebDriverWait(driver, 2).until(EC.staleness_of(row))  # it opened
+                Wait(driver, 2).until(EC.staleness_of(row))  # it opened
             except Exception:
                 ActionChains(driver).double_click(cell).perform()
         except StaleElementReferenceException:
             time.sleep(1)  # grid was redrawn under us; find the row again
             continue
         try:
-            link = WebDriverWait(driver, 15).until(
+            link = Wait(driver, 15).until(
                 EC.element_to_be_clickable((By.XPATH, DOWNLOAD_LINK_XPATH)))
             break
         except Exception:
@@ -363,16 +376,26 @@ def documents_flow(driver, wait, order_dir):
 
 # ---------- Teams ----------
 
+# Read every team box of the Teams tab in ONE browser call.
+READ_TEAMS_JS = """
+const out = [];
+for (const title of document.querySelectorAll('td.normalViewBold')) {
+  const table = title.closest('table');
+  const members = [];
+  for (const td of table.querySelectorAll('td')) {
+    if (td.className !== 'normalView') continue;
+    for (const line of td.innerText.split('\\n')) if (line.trim()) members.push(line.trim());
+  }
+  out.push([title.innerText.trim(), !!table.querySelector('img.iconPrimary'), members]);
+}
+return out;
+"""
+
+
 def read_teams(driver):
     """{team name: {"primary": str|None, "members": [names]}} from the Teams tab."""
     teams = {}
-    for title_td in driver.find_elements(By.XPATH, "//td[contains(@class,'normalViewBold')]"):
-        table = title_td.find_element(By.XPATH, "./ancestor::table[1]")
-        name = title_td.text.strip()
-        members = []
-        for td in table.find_elements(By.XPATH, ".//td[@class='normalView']"):
-            members += [m.strip() for m in td.text.splitlines() if m.strip()]
-        has_primary = bool(table.find_elements(By.CSS_SELECTOR, "img.iconPrimary"))
+    for name, has_primary, members in driver.execute_script(READ_TEAMS_JS):
         if name:
             teams[name] = {"primary": members[0] if has_primary and members else None,
                            "members": members}
@@ -463,7 +486,7 @@ def main():
     args = ap.parse_args()
 
     driver = start_firefox()
-    wait = WebDriverWait(driver, 60)
+    wait = Wait(driver, 60)
     try:
         driver.get(GOLD_URL)
         if not wait_for_gold(driver):

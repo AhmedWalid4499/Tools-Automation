@@ -17,6 +17,7 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 
 import gold_extract as gx
 import open_order as oo
+from open_gold import Wait
 
 RTDD_TITLES = {
     "Customer": "Revised Target Date - Customer Reason",
@@ -137,7 +138,7 @@ def parse_bulk(text, default_date=None):
 def reasons_for(driver, kind):
     """Reason (Description) options GOLD offers for this RTDD type, read from the open create form."""
     Select(driver.find_element(By.ID, "title")).select_by_visible_text(RTDD_TITLES[kind])
-    time.sleep(0.5)
+    time.sleep(0.3)
     return [o.text.strip() for o in driver.find_elements(By.CSS_SELECTOR, "#description option")
             if o.text.strip()]
 
@@ -157,7 +158,7 @@ def open_create_form(driver, wait):
     btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "img.butCreateNew")))
     btn.click()
     wait.until(EC.presence_of_element_located((By.ID, "title")))
-    time.sleep(1)
+    time.sleep(0.4)
 
 
 def find_rtdd_rows(driver, wait, title):
@@ -192,7 +193,7 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
 
     open_create_form(driver, wait)
     Select(driver.find_element(By.ID, "title")).select_by_visible_text(title)
-    time.sleep(0.5)
+    time.sleep(0.3)
     if reason:
         options = [o.text.strip() for o in driver.find_elements(By.CSS_SELECTOR, "#description option")]
         if reason not in options:
@@ -217,11 +218,11 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
 
     form = driver.find_element(By.ID, "title")
     driver.find_element(By.CSS_SELECTOR, "img.butAddToOrder").click()
-    time.sleep(1)
+    time.sleep(0.4)
     alert = _accept_alert(driver)
     if alert:
         raise RuntimeError(f"GOLD refused: {alert.strip()}")
-    WebDriverWait(driver, 60).until(EC.staleness_of(form))
+    Wait(driver, 60).until(EC.staleness_of(form))
 
     # Verify: a new RTDD row with this target date is on the Milestones tab.
     after = find_rtdd_rows(driver, wait, title)

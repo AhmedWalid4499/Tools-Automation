@@ -17,6 +17,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
 import open_order as oo
+from open_gold import Wait
 
 TEAM = "PMandCSM"   # GOLD's internal name of the STM team
 TEAM_LABEL = "STM"
@@ -63,7 +64,7 @@ def _cancel_edit(driver, wait):
     btns = driver.find_elements(By.CSS_SELECTOR, "img[onclick*='cancelEditOrder']")
     if btns:
         _click(driver, btns[0])
-        time.sleep(1)
+        time.sleep(0.4)
         _alert_text(driver)  # "You will lose any changes..." -> yes, discard
         wait.until(lambda d: not d.find_elements(By.ID, f"TeamControl{TEAM}_Inherit"))
     # Cancelled: nothing is pending, so leave the order even if GOLD still warns.
@@ -87,12 +88,12 @@ def _search_users(driver, wait, last, last_op, first, first_op):
     page = driver.find_element(By.TAG_NAME, "body")
     _click(driver, driver.find_element(By.ID, "searchButton"))
     try:
-        WebDriverWait(driver, 30).until(EC.staleness_of(page))  # the pop-up reloads with results
+        Wait(driver, 30).until(EC.staleness_of(page))  # the pop-up reloads with results
     except Exception:
         pass
     wait.until(lambda d: d.find_elements(By.XPATH, "//tbody[@id='GridTableBody']")
                or "user" in d.find_element(By.TAG_NAME, "body").text.lower())
-    time.sleep(1)
+    time.sleep(0.4)
     out = []
     for r in driver.find_elements(By.XPATH, "//tbody[@id='GridTableBody']/tr"):
         cells = [c for c in (c.text.strip() for c in r.find_elements(By.TAG_NAME, "td")) if c]
@@ -162,33 +163,33 @@ def assign_stm(driver, wait, order, first, last, dry_run=False, log=print, user=
     if alert:
         raise RuntimeError(f"GOLD: {alert.strip()}")
     wait.until(EC.presence_of_element_located((By.ID, f"TeamControl{TEAM}_Inherit")))
-    time.sleep(1)
+    time.sleep(0.4)
     main = driver.current_window_handle
     try:
         inherit = driver.find_element(By.ID, f"TeamControl{TEAM}_Inherit")
         if inherit.is_selected():  # 'Same as project': STM can't be edited until unticked
             _click(driver, inherit)
-            time.sleep(1)
+            time.sleep(0.4)
             _alert_text(driver)
 
         if _norm(full) not in [_norm(o) for o in _stm_options(driver)]:
             handles = set(driver.window_handles)
             _click(driver, wait.until(EC.element_to_be_clickable((By.ID, f"TeamControl{TEAM}_add"))))
-            WebDriverWait(driver, 30).until(lambda d: len(set(d.window_handles) - handles) == 1)
+            Wait(driver, 30).until(lambda d: len(set(d.window_handles) - handles) == 1)
             popup = (set(driver.window_handles) - handles).pop()
             driver.switch_to.window(popup)
             row, cells = _find_user(driver, wait, first, last, user)
             cell = row.find_elements(By.TAG_NAME, "td")[2]
             _click(driver, cell)  # clicking the selected row returns the user to the team
-            time.sleep(2)
+            time.sleep(0.4)
             if popup in driver.window_handles:
                 try:
                     ActionChains(driver).double_click(cell).perform()
                 except Exception:
                     pass
-            WebDriverWait(driver, 30).until(lambda d: popup not in d.window_handles)
+            Wait(driver, 30).until(lambda d: popup not in d.window_handles)
             driver.switch_to.window(main)
-            WebDriverWait(driver, 30).until(
+            Wait(driver, 30).until(
                 lambda d: _norm(full) in [_norm(o) for o in _stm_options(d)])
             log(f"  {order}: added {full} ({cells[0]}) to {TEAM_LABEL}")
 
@@ -199,11 +200,11 @@ def assign_stm(driver, wait, order, first, last, dry_run=False, log=print, user=
             sel = driver.find_element(By.ID, f"TeamControl{TEAM}")
             Select(sel).select_by_index(idx)
             driver.execute_script("arguments[0].dispatchEvent(new Event('change'))", sel)
-            time.sleep(0.5)
+            time.sleep(0.3)
             _click(driver, driver.find_element(By.ID, f"TeamControl{TEAM}_Select"))  # orange arrow
-            time.sleep(1)
+            time.sleep(0.4)
             _alert_text(driver)
-            WebDriverWait(driver, 60).until(
+            Wait(driver, 60).until(
                 lambda d: d.find_elements(By.ID, f"TeamControl{TEAM}")
                 and _norm(_stm_options(d)[0]) == _norm(full))
         if _norm(_stm_options(driver)[0]) != _norm(full):
@@ -215,11 +216,11 @@ def assign_stm(driver, wait, order, first, last, dry_run=False, log=print, user=
 
         save = driver.find_element(By.CSS_SELECTOR, "img.butSaveTeams")
         _click(driver, save)
-        time.sleep(1)
+        time.sleep(0.4)
         alert = _alert_text(driver)
         if alert:
             raise RuntimeError(f"GOLD refused to save: {alert.strip()}")
-        WebDriverWait(driver, 60).until(EC.staleness_of(save))
+        Wait(driver, 60).until(EC.staleness_of(save))
     except Exception:
         try:
             _cancel_edit(driver, wait)

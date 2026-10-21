@@ -31,7 +31,7 @@ import gold_teams as gt
 import gold_update as gu
 from gold_grid import EditGrid
 import open_order as oo
-from open_gold import APP_NAME, BUNDLE_DIR, GOLD_URL, HERE, start_firefox, wait_for_gold
+from open_gold import HELPER_PROFILES_DIR, Wait, APP_NAME, BUNDLE_DIR, GOLD_URL, HERE, start_firefox, wait_for_gold
 from version import AUTHOR, __version__
 
 SETTINGS_FILE = HERE / "gold_app_settings.json"
@@ -59,7 +59,8 @@ def safe_name(s):
 
 def load_settings():
     s = {"screenshots": str(HERE / "output" / "screenshots"), "exports": str(HERE / "output"),
-         "full_page": True, "auto_shot": False, "per_order_folder": True, "show_browser": False}
+         "full_page": True, "auto_shot": False, "per_order_folder": True, "show_browser": False,
+         "parallel_sessions": True}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -114,6 +115,7 @@ class Worker:
         self.driver = None
         self.wait = None
         self.restart = False  # set when the "show Firefox" setting changes
+        self.helpers = []     # extra hidden GOLD sessions for reading many orders side by side
         threading.Thread(target=self._loop, daemon=True).start()
 
     def submit(self, label, fn, done=None, retry=False):
@@ -155,16 +157,17 @@ class Worker:
                                    "reconnects by itself when the connection is back.")
             time.sleep(5)
 
-    def _healthy(self):
+    def _healthy(self, driver=None):
         """Is the open Firefox alive, on GOLD and not stuck on an error page?"""
+        driver = driver or self.driver
         try:
-            url = self.driver.current_url
+            url = driver.current_url
             if url.startswith("about:") and "blank" not in url:
                 return False  # about:neterror, about:certerror ...
             if GOLD_HOST not in url:
                 return False  # e.g. sign-in page after the session expired
-            body = self.driver.execute_script("return (document.body && document.body.innerText || '')"
-                                              ".slice(0, 3000).toLowerCase()")
+            body = driver.execute_script("return (document.body && document.body.innerText || '')"
+                                         ".slice(0, 3000).toLowerCase()")
             return not any(k in body for k in NET_ERROR_TEXT)
         except Exception:
             return False
@@ -201,7 +204,7 @@ class Worker:
         show = bool(self.app.settings.get("show_browser"))
         self.app.log("Signing in to GOLD" + ("..." if show else " in the background..."))
         self.driver = start_firefox(headless=not show)
-        self.wait = WebDriverWait(self.driver, 60)
+        self.wait = Wait(self.driver, 60)
         self.driver.get(GOLD_URL)
         if wait_for_gold(self.driver, timeout=300 if show else 90):
             return
@@ -210,14 +213,62 @@ class Worker:
             self.app.log("GOLD needs you to sign in - opening the Firefox window...")
             self._quit_driver()
             self.driver = start_firefox(headless=False)
-            self.wait = WebDriverWait(self.driver, 60)
+            self.wait = Wait(self.driver, 60)
             self.driver.get(GOLD_URL)
             if wait_for_gold(self.driver):
                 return
         raise RuntimeError("GOLD did not load. Sign in in the Firefox window, then try again.")
 
+    def helper_drivers(self, count):
+        """Up to `count` extra hidden GOLD sessions (read-only work), each with its own Firefox
+        profile. Healthy ones are reused; missing ones are started side by side (~20 s, once)."""
+        alive = []
+        for d, i in self.helpers:
+            if len(alive) < count and self._healthy(d):
+                alive.append((d, i))
+            else:
+                try:
+                    d.quit()
+                except Exception:
+                    pass
+        self.helpers = alive
+        missing = count - len(alive)
+        if missing > 0:
+            used = {i for _, i in alive}
+            free = [k for k in range(1, count + len(used) + 2) if k not in used][:missing]
+            self.app.log(f"Opening {missing} extra GOLD session(s) to read orders side by side...")
+            started, lock = [], threading.Lock()
+
+            def start(i):
+                try:
+                    d = start_firefox(headless=True, profile_dir=HELPER_PROFILES_DIR / f"session{i}")
+                    d.get(GOLD_URL)
+                    if wait_for_gold(d, timeout=90):
+                        with lock:
+                            started.append((d, i))
+                    else:
+                        d.quit()
+                except Exception as e:  # e.g. profile in use: just read with fewer sessions
+                    self.app.log(f"  extra session {i} not available ({str(e).splitlines()[0][:70]})")
+            threads = [threading.Thread(target=start, args=(i,)) for i in free]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.helpers += started
+        return [d for d, _ in self.helpers]
+
+    def drop_helper(self, driver):
+        self.helpers = [(d, i) for d, i in self.helpers if d is not driver]
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
     def close(self):
         self.jobs.put(("quit", None, None, False))
+        for d, _ in list(self.helpers):
+            self.drop_helper(d)
         self._quit_driver()
 
 
@@ -252,6 +303,7 @@ class App(tk.Tk):
         self.auto_shot = tk.BooleanVar(value=self.settings["auto_shot"])
         self.per_order = tk.BooleanVar(value=self.settings["per_order_folder"])
         self.show_browser = tk.BooleanVar(value=self.settings["show_browser"])
+        self.parallel = tk.BooleanVar(value=self.settings["parallel_sessions"])
 
         self._style()
         self._build()
@@ -261,6 +313,22 @@ class App(tk.Tk):
         threading.Thread(target=self._watch_connection, daemon=True).start()
         self.new_release = None
         self.after(4000, lambda: self._check_updates(quiet=True))  # quiet check at start-up
+        # Sign in to GOLD right away, in the background, so the first action doesn't wait for it.
+        self.after(300, self._prewarm)
+
+    def _prewarm(self):
+        if self.busy or self.worker.driver is not None:
+            return
+        def warm():
+            w = self.worker
+            w.ensure_browser()
+            try:  # also load the order search page now, so the first order opens straight away
+                oo.open_orders_tab(w.driver, w.wait, discard_changes=True)
+                oo.untick_my_orders(w.driver)
+            except Exception:
+                pass
+            return True
+        self.worker.submit("Connecting to GOLD", warm, lambda _: self.log("Connected to GOLD - ready."))
 
     # ----- thread-safe UI helpers
     def ui(self, fn):
@@ -665,6 +733,9 @@ class App(tk.Tk):
         ttk.Checkbutton(body, text="Show the Firefox window (normally GOLD runs hidden in the background)",
                         variable=self.show_browser, style="Card.TCheckbutton").grid(
             row=8, column=0, columnspan=4, sticky="w", pady=2)
+        ttk.Checkbutton(body, text="Overview: read 3+ orders side by side (up to 3 GOLD sessions - much faster)",
+                        variable=self.parallel, style="Card.TCheckbutton").grid(
+            row=9, column=0, columnspan=4, sticky="w", pady=2)
 
         def close():
             self._store_settings()
@@ -675,7 +746,7 @@ class App(tk.Tk):
             win.destroy()
 
         btns = ttk.Frame(body, style="Card.TFrame")
-        btns.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(18, 0))
+        btns.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(18, 0))
         ttk.Label(btns, text=f"{APP_NAME} {__version__}  ·  \u00a9 2026 {AUTHOR}  ·  data folder: {HERE}",
                   style="CardMuted.TLabel", font=(FONT, 8)).pack(side="left")
         ttk.Button(btns, text="Done", style="Accent.TButton", command=close).pack(side="right")
@@ -704,6 +775,7 @@ class App(tk.Tk):
         ent.pack(side="left", padx=8)
         ent.bind("<Return>", lambda e: self._ov_run())
         self._btn(bar, "Show overview", self._ov_run, "Accent.TButton").pack(side="left")
+        self._btn(bar, "↻ Refresh", lambda: self._ov_run(refresh=True)).pack(side="left", padx=(6, 0))
         ttk.Label(bar, text="  one or more, separated by spaces or commas", style="Muted.TLabel").pack(side="left")
         self.ov_export_btn = self._btn(bar, "Export to Excel", self._ov_export)
         self.ov_export_btn.pack(side="right")
@@ -764,10 +836,15 @@ class App(tk.Tk):
         self.ov_text.tag_configure("label", font=(FONT, 10, "bold"), foreground=MUTED)
         self.ov_text.tag_configure("value", font=(FONT, 10), foreground=INK, lmargin2=234)
         self.ov_results = {}   # order -> overview dict
+        self.ov_cache = {}     # order -> (time read, overview dict)
         self.ov_errors = {}    # order -> error text
         self.ov_export_btn.state(["disabled"])
 
-    def _ov_run(self):
+    OV_CACHE_MIN = 10        # an order read in the last 10 minutes is shown again instantly
+    OV_PARALLEL_FROM = 3     # from this many orders, read with extra GOLD sessions side by side
+    OV_SESSIONS = 3          # GOLD sessions in total (the main one + 2 extra)
+
+    def _ov_run(self, refresh=False):
         if self.busy:
             return
         orders = []
@@ -781,43 +858,102 @@ class App(tk.Tk):
             return
         self.ov_results, self.ov_errors = {}, {}
         self.ov_list.delete(*self.ov_list.get_children())
+        now = time.time()
+        todo = []
         for o in orders:
             self.ov_list.insert("", "end", iid=o, values=(o, "...", "waiting", ""))
+            cached = self.ov_cache.get(o)
+            if cached and not refresh and now - cached[0] < self.OV_CACHE_MIN * 60:
+                self.ov_results[o] = cached[1]
+                self._ov_listed(o, cached[1])
+            else:
+                todo.append(o)
+        if not todo:
+            self.log(f"Overview: {len(orders)} order(s) shown from the last read "
+                     f"(less than {self.OV_CACHE_MIN} min old) - Refresh reads GOLD again")
+            self._ov_show_selected()
+            self._refresh_action_state()
+            return
         w = self.worker
+        lock = threading.Lock()
+
+        def read_one(driver, o):
+            self.ui(lambda: self.ov_list.item(o, values=(o, "...", "reading GOLD...", "")))
+            ov = go.collect(driver, Wait(driver, 60), o)
+            with lock:
+                self.ov_results[o] = ov
+                self.ov_cache[o] = (time.time(), ov)
+            self.ui(lambda: self._ov_listed(o, ov))
+
+        def failed(o, e):
+            err = str(e).splitlines()[0] if str(e) else type(e).__name__
+            with lock:
+                self.ov_errors[o] = err
+            self.ui(lambda: self.ov_list.item(o, values=(o, "error", err, ""), tags=("err",)))
+            self.log(f"Overview {o}: FAILED - {err}")
 
         def job():
             w.ensure_browser()
-            for o in orders:
-                self.ui(lambda o=o: self.ov_list.item(o, values=(o, "...", "reading GOLD...", "")))
-                try:
-                    try:
-                        w.ensure_browser()
-                        ov = go.collect(w.driver, w.wait, o)
-                    except Exception as e:
-                        if not w.session_problem(e):
-                            raise
-                        self.log(f"Connection problem on {o} - reconnecting and retrying...")
-                        w.wait_for_network()
-                        w.restart = True
-                        w.ensure_browser()
-                        ov = go.collect(w.driver, w.wait, o)
-                    self.ov_results[o] = ov
-                    self.ui(lambda o=o, ov=ov: self._ov_listed(o, ov))
-                except Exception as e:
-                    err = str(e).splitlines()[0] if str(e) else type(e).__name__
-                    self.ov_errors[o] = err
-                    self.ui(lambda o=o, err=err: self.ov_list.item(o, values=(o, "error", err, ""), tags=("err",)))
-                    self.log(f"Overview {o}: FAILED - {err}")
-            return len(self.ov_results)
+            queue_ = list(todo)
+            helpers = []
+            if len(todo) >= self.OV_PARALLEL_FROM and self.settings.get("parallel_sessions", True):
+                helpers = w.helper_drivers(min(self.OV_SESSIONS - 1, len(todo) - 1))
 
-        def done(n):
-            self.log(f"Overview ready for {n} of {len(orders)} order(s)")
-            first = next((o for o in orders if o in self.ov_results), None)
-            if first:
-                self.ov_list.selection_set(first)
+            def take():
+                with lock:
+                    return queue_.pop(0) if queue_ else None
+
+            def main_lane():  # the app's own session: reconnects and retries once
+                while (o := take()) is not None:
+                    try:
+                        try:
+                            w.ensure_browser()
+                            read_one(w.driver, o)
+                        except Exception as e:
+                            if not w.session_problem(e):
+                                raise
+                            self.log(f"Connection problem on {o} - reconnecting and retrying...")
+                            w.wait_for_network()
+                            w.restart = True
+                            w.ensure_browser()
+                            read_one(w.driver, o)
+                    except Exception as e:
+                        failed(o, e)
+
+            def helper_lane(d):  # an extra session: on a session problem, hand the order back
+                while (o := take()) is not None:
+                    try:
+                        read_one(d, o)
+                    except Exception as e:
+                        if w._healthy(d) and not looks_like_connection_error(e):
+                            failed(o, e)
+                            continue
+                        with lock:
+                            queue_.insert(0, o)
+                        self.log(f"An extra GOLD session stopped - its orders go to the others")
+                        w.drop_helper(d)
+                        return
+
+            lanes = [threading.Thread(target=helper_lane, args=(d,)) for d in helpers]
+            for t in lanes:
+                t.start()
+            main_lane()
+            for t in lanes:
+                t.join()
+            main_lane()  # anything a stopped extra session handed back
+            return len(self.ov_results), len(helpers) + 1
+
+        def done(res):
+            n, sessions = res
+            self.log(f"Overview ready for {n} of {len(orders)} order(s)"
+                     + (f" ({sessions} GOLD sessions side by side)" if sessions > 1 else ""))
+            if not self.ov_list.selection():
+                first = next((o for o in orders if o in self.ov_results), None)
+                if first:
+                    self.ov_list.selection_set(first)
             self._refresh_action_state()
 
-        w.submit(f"Reading {len(orders)} order(s)", job, done)
+        w.submit(f"Reading {len(todo)} order(s)", job, done)
 
     def _ov_listed(self, o, ov):
         days = "" if ov["days_left"] is None else ov["rag_text"]
@@ -1515,7 +1651,7 @@ class App(tk.Tk):
     def _store_settings(self):
         self.settings.update(screenshots=self.shot_dir.get(), exports=self.export_dir.get(),
                              full_page=self.full_page.get(), auto_shot=self.auto_shot.get(),
-                             per_order_folder=self.per_order.get())
+                             per_order_folder=self.per_order.get(), parallel_sessions=self.parallel.get())
         save_settings(self.settings)
 
     def _browse(self, var):
@@ -1854,7 +1990,7 @@ def selftest(order):
     try:
         d = start_firefox(headless=True)
         lines.append("Firefox started (background)")
-        w = WebDriverWait(d, 60)
+        w = Wait(d, 60)
         d.get(GOLD_URL)
         if not wait_for_gold(d):
             raise RuntimeError("GOLD did not load (SSO?)")

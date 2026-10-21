@@ -16,6 +16,7 @@ from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
 
 GOLD_URL = "https://gold.sso.infra.ftgroup/home/gold/jsp/Guardian.jsp"
 APP_NAME = "GOLD Express"
@@ -32,9 +33,27 @@ if FROZEN and not HERE.exists() and (_OLD_HERE / "gold_app_settings.json").exist
 # while the app is open: Firefox can't share one profile between two windows.
 PROFILE_DIR = Path(os.environ.get("GOLD_PROFILE_DIR")
                    or Path.home() / ".gold-automation" / "firefox-profile")
+# Profiles of the extra GOLD sessions that read many orders side by side (Overview).
+HELPER_PROFILES_DIR = PROFILE_DIR.parent / "helper-sessions"
 OUT_DIR = HERE / "output"
 DOWNLOAD_DIR = OUT_DIR / "downloads"
 LOGIN_TIMEOUT_S = 300
+POLL_S = 0.1  # how often waits re-check the page (Selenium's default 0.5 s adds ~0.4 s per step)
+
+
+def Wait(driver, timeout=60):
+    """A WebDriverWait that notices the page is ready within 0.1 s."""
+    return WebDriverWait(driver, timeout, poll_frequency=POLL_S)
+
+
+def page_text(driver):
+    """The visible text of the page in ONE browser call (Selenium's .text on a big page is slow)."""
+    try:
+        # Non-breaking spaces and tabs become plain spaces, as Selenium's .text does.
+        return driver.execute_script(
+            "return document.body ? document.body.innerText.replace(/[\\u00a0\\t]/g, ' ') : ''") or ""
+    except Exception:
+        return ""
 
 
 def find_firefox():
@@ -59,9 +78,11 @@ def find_geckodriver():
     return None
 
 
-def start_firefox(headless=False):
-    """headless=True runs Firefox in the background (no window); GOLD's SSO still signs in."""
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+def start_firefox(headless=False, profile_dir=None):
+    """headless=True runs Firefox in the background (no window); GOLD's SSO still signs in.
+    profile_dir: another Firefox profile, for extra GOLD sessions running side by side."""
+    profile = Path(profile_dir) if profile_dir else PROFILE_DIR
+    profile.mkdir(parents=True, exist_ok=True)
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     opts = Options()
     opts.binary_location = find_firefox()
@@ -70,7 +91,7 @@ def start_firefox(headless=False):
         opts.add_argument("--width=1600")  # page size for screenshots
         opts.add_argument("--height=1000")
     opts.add_argument("-profile")
-    opts.add_argument(str(PROFILE_DIR))
+    opts.add_argument(str(profile))
     # Save GOLD documents straight to DOWNLOAD_DIR, no "open/save" dialog, PDFs not opened inline.
     opts.set_preference("browser.download.folderList", 2)
     opts.set_preference("browser.download.dir", str(DOWNLOAD_DIR))
@@ -103,7 +124,7 @@ def start_firefox(headless=False):
     return driver
 
 
-def page_text(driver):
+def frames_text(driver):
     """Text of the main document plus every (nested) frame."""
     chunks = []
 
@@ -132,28 +153,53 @@ def wait_for_gold(driver, timeout=LOGIN_TIMEOUT_S):
     while time.time() < deadline:
         try:
             on_gold = "gold.sso.infra.ftgroup" in driver.current_url
-            body = driver.find_element(By.TAG_NAME, "body").text if on_gold else ""
+            body = page_text(driver) if on_gold else ""
         except Exception:
             body = ""
         if "Inbox" in body:
-            time.sleep(2)
+            # GOLD's announcement pop-up opens once the page has finished loading: wait for
+            # that (a fraction of a second), give it a moment to appear, then close it.
+            try:
+                Wait(driver, 15).until(lambda d: d.execute_script("return document.readyState") == "complete")
+            except Exception:
+                pass
+            end = time.time() + 1.0
+            while time.time() < end and not splash_visible(driver):
+                time.sleep(0.1)
             dismiss_splash(driver)
             return True
-        time.sleep(2)
+        time.sleep(0.25)
     return False
 
 
-def dismiss_splash(driver):
-    """Close GOLD's announcement pop-up (dark overlay + box with a 'Close' link) if shown.
-    'Don't show me again' is left for the user to decide."""
+SPLASH_VISIBLE_JS = """
+const box = document.getElementById('light');
+return !!box && box.offsetParent !== null && getComputedStyle(box).display !== 'none';
+"""
+
+
+def splash_visible(driver):
     try:
-        boxes = [b for b in driver.find_elements(By.ID, "light") if b.is_displayed()]
-        for box in boxes:
-            for close in box.find_elements(By.XPATH, ".//*[contains(@onclick,'closeSplashScreen')]"):
+        return bool(driver.execute_script(SPLASH_VISIBLE_JS))
+    except Exception:
+        return False
+
+
+def dismiss_splash(driver):
+    """Close GOLD's announcement pop-up (dark overlay + box with a 'Close' link) if shown, the way
+    its Close link does. 'Don't show me again' is left for the user to decide."""
+    if not splash_visible(driver):
+        return
+    try:
+        closed = driver.execute_script(
+            "if (typeof closeSplashScreen === 'function') { closeSplashScreen();"
+            " if (typeof reloadScrollBars === 'function') reloadScrollBars(); return true; } return false;")
+        if not closed:
+            for close in driver.find_elements(By.XPATH, "//*[@id='light']//*[contains(@onclick,'closeSplashScreen')]"):
                 if close.is_displayed():
                     close.click()
-                    time.sleep(1)
                     break
+        Wait(driver, 3).until(lambda d: not splash_visible(d))
     except Exception:
         pass
 
@@ -167,7 +213,7 @@ def main():
         if not wait_for_gold(driver):
             print("Timed out waiting for GOLD; saving whatever is on screen.")
         driver.save_screenshot(str(OUT_DIR / "gold_home.png"))
-        text = f"URL: {driver.current_url}\nTITLE: {driver.title}\n\n" + page_text(driver)
+        text = f"URL: {driver.current_url}\nTITLE: {driver.title}\n\n" + frames_text(driver)
         (OUT_DIR / "gold_home.txt").write_text(text, encoding="utf-8")
         (OUT_DIR / "gold_home.html").write_text(driver.page_source, encoding="utf-8")
         print(f"Saved screenshot, text and HTML to {OUT_DIR}")

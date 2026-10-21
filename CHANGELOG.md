@@ -1,5 +1,12 @@
 # GOLD Express - what's new
 
+## 1.6.0
+- **Much faster.** Opening an order takes about 5 seconds instead of 25-45, tabs open in 1-3 seconds,
+  and Teams / Documents appear instantly. GOLD Express signs in to GOLD in the background as soon
+  as it starts, so the first order opens straight away.
+- **Overview reads several orders side by side** (up to 3 GOLD sessions; can be turned off in Settings),
+  and orders read in the last 10 minutes are shown again instantly. New **Refresh** button.
+
 ## 1.5.1
 - The update check now works reliably on shared office networks (it no longer depends on GitHub's
   limited API), and shows the release notes instantly.
