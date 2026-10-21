@@ -14,6 +14,7 @@ a hidden Firefox window, so routine order work takes a few clicks instead of man
 | **Revised Target Date** | Add the "Revised Target Date" milestone (Customer or Orange Business Services reason) to many orders at once. |
 | **Bulk Order Assignment** | Make a DPM the primary STM of many orders at once. |
 | **DPM Names** | Manage the DPM list used by Bulk Order Assignment, and check names in GOLD. |
+| **Org Chart** | Find anyone at Orange Business (email, job, phone, manager chain); look up the team of an order. |
 | **Ask GOLD** | Chat assistant (Claude): ask about deadlines, pricing, site address, people or notes of any order; answers come as tables and lists, read live from GOLD. |
 
 Ask GOLD uses the team's AI key file (`salto-buddy-team.key` in the team's SharePoint folder). The key
@@ -57,6 +58,7 @@ To release a new version: bump `__version__` in `version.py`, add a section to `
 | `gold_names.py` | DPM names list |
 | `gold_grid.py` | Excel-like editable table |
 | `gold_update.py` | Updates from GitHub Releases |
+| `gold_orgchart.py` | Orange Business Org Chart lookups (shared with SALTO Buddy) |
 | `gold_ai.py`, `gold_markdown.py` | Ask GOLD: Claude conversation with read-only GOLD tools, answer rendering |
 | `installer/` | Inno Setup wizard |
 

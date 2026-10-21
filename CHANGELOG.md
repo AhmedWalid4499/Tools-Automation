@@ -1,5 +1,14 @@
 # GOLD Express - what's new
 
+## 1.9.0
+- New **Org Chart** tab: find anyone at Orange Business by name, last name, email or CUID and see
+  their email, job, department, phone, location and who they report to (click a manager to open
+  them). Names written the GOLD way ("ahmed elbourgy") are found too.
+- **Order team**: one click looks up the people on the open order's GOLD teams (primary members and
+  small teams; tick "all members" for everyone) with their email and manager.
+- Order explorer > Teams: **double-click a member** to see them in the Org Chart.
+- Ask GOLD can now look people up: "what is the email of the STM's manager?"
+
 ## 1.8.0
 - **Ask GOLD knows your order.** It answers about the order open (or typed) in the Order explorer:
   just ask "what are the deadlines?" or "who is the STM?". One click on a suggestion card

@@ -246,6 +246,22 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "find_person",
+        "description": (
+            "Look a person up in the Orange Business Org Chart: email, job title, department, country, "
+            "phone / mobile, CUID and their manager chain (manager first, then the manager's manager...). "
+            "Use it for people named in GOLD (STM, order owner, account manager, milestone owners) when the "
+            "user wants their email, phone, job or manager, or asks about someone by name. Accepts a full "
+            "name as written in GOLD, a last name, an email or a CUID."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"person": {"type": "string",
+                                      "description": "Name (e.g. Nourhane Haidar), last name, email or CUID"}},
+            "required": ["person"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -294,6 +310,11 @@ class GoldReader:
         return text
 
     def run(self, name, args):
+        if name == "find_person":
+            who = " ".join(str(args.get("person", "")).split())
+            if not who:
+                raise ValueError("No person given.")
+            return self._cached(("person", who.lower()), lambda: self._person(who))
         order = str(args.get("order", "")).strip()
         if not re.fullmatch(r"\d{2}-\d{5,8}", order):
             raise ValueError(f"'{order}' is not a GOLD order number (like 10-1771012).")
@@ -303,6 +324,18 @@ class GoldReader:
             tab = str(args.get("tab", "")).strip() or "Information"
             return self._cached((order, tab.lower()), lambda: self._tab(order, tab))
         raise ValueError(f"Unknown tool {name}")
+
+    def _person(self, who):
+        self.app.log(f"Ask GOLD: looking up {who} in the Org Chart...")
+        people = self.app._org(lambda oc: oc.query(who, levels=4, limit=5))
+        if not people:
+            return f"Nobody found in the Org Chart for '{who}'."
+        keep = ("display_name", "busi_title", "email", "phone", "mobile", "dept_desc", "city", "country_descr",
+                "vendor_name", "cuid")
+        out = [{**{k: p.get(k, "") for k in keep},
+                "managers": [{k: m.get(k, "") for k in ("display_name", "busi_title", "email")}
+                             for m in p.get("chain", [])]} for p in people]
+        return json.dumps(out, ensure_ascii=False)
 
     def _overview(self, order):
         import gold_overview as go
@@ -369,6 +402,8 @@ notes, site address). When the user does not repeat the order number, use the or
 the conversation. If no order number is known, ask for it.
 - The order open in GOLD Express's Order explorer is given with each question: questions that name no \
 order ("what are the deadlines?", "who is the STM?") are about that order.
+- For a person's email, phone, job or manager, use find_person (Orange Business Org Chart) with the name \
+as GOLD shows it.
 - Several orders: read each one, then compare.
 - Dates as dd-Mon-yyyy (e.g. 06-Dec-2026). Amounts with their currency. Say how many days are left \
 (or how late) for deadlines when useful.
@@ -431,8 +466,11 @@ class Chat:
                     return text or "(no answer)"
                 results = []
                 for call in calls:
-                    what = call.input.get("tab") or "overview"
-                    progress(f"Reading {call.input.get('order', '')} - {what}...")
+                    if call.name == "find_person":
+                        progress(f"Looking up {call.input.get('person', '')} in the Org Chart...")
+                    else:
+                        what = call.input.get("tab") or "overview"
+                        progress(f"Reading {call.input.get('order', '')} - {what}...")
                     try:
                         content, err = self.reader.run(call.name, call.input), False
                     except Exception as e:

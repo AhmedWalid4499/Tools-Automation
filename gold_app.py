@@ -28,6 +28,7 @@ import gold_extract as gx
 import gold_markdown as gmd
 import gold_milestones as gm
 import gold_names as gn
+import gold_orgchart as goc
 import gold_overview as go
 import gold_teams as gt
 import gold_update as gu
@@ -38,6 +39,7 @@ from version import AUTHOR, __version__
 
 SETTINGS_FILE = HERE / "gold_app_settings.json"
 AI_KEY_CACHE = HERE / "ai_key.bin"  # the team's AI key, encrypted for this Windows user
+OC_CACHE = HERE / "orgchart_cache.json"  # Org Chart lookups of GOLD team members (kept 7 days)
 
 # Palette (Orange-style: black header, orange accent, light grey canvas)
 ORANGE = "#FF7900"
@@ -555,7 +557,7 @@ class App(tk.Tk):
         st.map("TCombobox", fieldbackground=[("readonly", CARD)], bordercolor=[("focus", ORANGE)])
         # Tabs
         st.configure("TNotebook", background=CANVAS, borderwidth=0, tabmargins=(0, 6, 0, 0))
-        st.configure("TNotebook.Tab", background=CANVAS, foreground=MUTED, padding=(18, 8),
+        st.configure("TNotebook.Tab", background=CANVAS, foreground=MUTED, padding=(14, 8),
                      font=(FONT, 10, "bold"), borderwidth=0)
         st.map("TNotebook.Tab", background=[("selected", CARD)], foreground=[("selected", ORANGE)],
                expand=[("selected", (0, 0, 0, 0))])
@@ -634,6 +636,8 @@ class App(tk.Tk):
         self.notebook.add(assign, text="Bulk Order Assignment")
         names = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
         self.notebook.add(names, text="DPM Names")
+        org = self.org_frame = tk.Frame(self.notebook, background=CARD)
+        self.notebook.add(org, text="Org Chart")
         ask = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
         self.notebook.add(ask, text="✦ Ask GOLD")
         self.bulk_stop_flag = threading.Event()
@@ -642,6 +646,7 @@ class App(tk.Tk):
         self._build_rtdd_tab(rtdd)
         self._build_assign_tab(assign)
         self._build_names_tab(names)
+        self._build_org_tab(org)
         self._build_ask_tab(ask)
         self._refresh_action_state()
 
@@ -1600,6 +1605,240 @@ class App(tk.Tk):
 
         w.submit(f"Checking {len(entries)} name(s) in GOLD", job, done)
 
+    # ----- Org Chart tab
+    OC_COLUMNS = (("name", "Name", 190), ("title", "Job title", 220), ("dept", "Department", 200),
+                  ("country", "Country", 110), ("team", "GOLD team", 150), ("email", "Email", 230))
+
+    def _org(self, fn):
+        """Worker thread: run fn(org_chart) in the Org Chart tab kept open next to GOLD in the hidden
+        Firefox (opened on first use, about 10 s), then switch back to GOLD."""
+        w = self.worker
+        w.ensure_browser()
+        d = w.driver
+        oc = getattr(self, "_oc", None)
+        if oc is None or oc.d is not d or oc.handle not in d.window_handles:
+            self.log("Opening the Org Chart...")
+            oc = goc.OrgChart(d, cache_file=str(OC_CACHE), sign_in_wait=60, log=self.log)
+            try:
+                oc.__enter__()
+            except Exception:
+                oc.__exit__(None, None, None)
+                raise
+            self._oc = oc
+        try:
+            return fn(oc)
+        finally:
+            back = oc.back if oc.back in d.window_handles else d.window_handles[0]
+            d.switch_to.window(back)
+
+    def _build_org_tab(self, f):
+        f.configure(padx=0, pady=0)
+        head = tk.Frame(f, background=CARD, padx=20, pady=12)
+        head.pack(fill="x")
+        tk.Label(head, text="OC", bg=ORANGE, fg="white", font=(FONT, 10, "bold"), width=3, pady=3).pack(side="left")
+        titles = tk.Frame(head, background=CARD)
+        titles.pack(side="left", padx=(10, 0))
+        tk.Label(titles, text="Org Chart", bg=CARD, fg=INK, font=(FONT, 13, "bold")).pack(anchor="w")
+        tk.Label(titles, text="Find anyone at Orange Business by name, last name, email or CUID: email, job, "
+                              "phone and who they report to", bg=CARD, fg=MUTED, font=(FONT, 9)).pack(anchor="w")
+        tk.Frame(f, background=LINE, height=1).pack(fill="x")
+
+        bar = tk.Frame(f, background=CARD, padx=20, pady=12)
+        bar.pack(fill="x")
+        self.oc_query = tk.StringVar()
+        ent = ttk.Entry(bar, textvariable=self.oc_query, width=34, font=(FONT, 11))
+        ent.pack(side="left")
+        ent.bind("<Return>", lambda e: self._oc_search())
+        self._btn(bar, "Search", self._oc_search, "Accent.TButton").pack(side="left", padx=(8, 0))
+        self.oc_all = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="all members", variable=self.oc_all, style="Card.TCheckbutton").pack(side="right")
+        self.oc_team_btn = self._btn(bar, "👥  Order team", self._oc_order_team)
+        self.oc_team_btn.pack(side="right", padx=(0, 8))
+
+        panes = ttk.Panedwindow(f, orient="horizontal")
+        panes.pack(fill="both", expand=True, padx=20, pady=(0, 14))
+        left = tk.Frame(panes, background=CARD)
+        self.oc_title = tk.Label(left, text="", bg=CARD, fg=MUTED, font=(FONT, 9, "bold"), anchor="w")
+        self.oc_title.pack(fill="x", pady=(0, 6))
+        tf = tk.Frame(left, background=CARD)
+        tf.pack(fill="both", expand=True)
+        self.oc_tree = ttk.Treeview(tf, columns=[c for c, _, _ in self.OC_COLUMNS], show="headings",
+                                    selectmode="browse")
+        for c, t, w in self.OC_COLUMNS:
+            self.oc_tree.heading(c, text=t, anchor="w")
+            self.oc_tree.column(c, width=w, anchor="w")
+        self.oc_tree.tag_configure("odd", background="#FAFAFB")
+        self.oc_tree.tag_configure("missing", foreground=MUTED)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.oc_tree.yview)
+        self.oc_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.oc_tree.pack(side="left", fill="both", expand=True)
+        self.oc_tree.bind("<<TreeviewSelect>>", lambda e: self._oc_show())
+        panes.add(left, weight=3)
+        self.oc_card = tk.Frame(panes, background=CARD, padx=18)
+        panes.add(self.oc_card, weight=2)
+
+        def place_sash(e=None):  # give the person card ~430 px, once the tab has its real size
+            if panes.winfo_width() > 900:
+                panes.sashpos(0, panes.winfo_width() - 430)
+                panes.unbind("<Configure>")
+        panes.bind("<Configure>", place_sash)
+        self.oc_people = []
+        self._oc_fill([], "Search for a person, or look up the team of the order you have open.")
+
+    def _oc_search(self, text=None):
+        q = (text if text is not None else self.oc_query.get()).strip()
+        if not q or self.busy:
+            return
+        self.oc_query.set(q)
+        self.notebook.select(self.org_frame)
+        self.worker.submit(f"Searching the Org Chart for {q}",
+                           lambda: self._org(lambda oc: oc.query(q)),
+                           lambda people: self._oc_fill(people, f"{len(people)} result(s) for “{q}”" if people
+                                                        else f"Nobody found for “{q}”. Try the last name only."),
+                           retry=True)
+
+    def _oc_lookup_member(self, event=None):
+        """Explorer > Teams: double-click a member to look them up in the Org Chart."""
+        sel = self.members.curselection()
+        if sel:
+            self._oc_search(self.members.get(sel[0]).replace("★", "").strip())
+
+    def _oc_order_team(self):
+        order = self.order or (self._ask_context_order() if hasattr(self, "ask_input") else "")
+        if not order:
+            messagebox.showinfo(APP_NAME, "Open an order in the Order explorer first.")
+            return
+        if self.busy:
+            return
+        teams = self.teams if self.order == order and self.teams else None
+        everyone = self.oc_all.get()
+
+        def job():
+            nonlocal teams
+            if not teams:
+                self._ensure_order(order)
+                w = self.worker
+                oo.open_tab(w.driver, w.wait, "Teams")
+                teams = oo.read_teams(w.driver)
+            # By default: each team's primary member, and everyone in small teams (big pools such as
+            # Order Entry have ~100 people). "everyone" looks them all up (slower).
+            roles = {}
+            for team, t in teams.items():
+                for m in t["members"]:
+                    if everyone or m == t["primary"] or len(t["members"]) <= 5:
+                        roles.setdefault(m, []).append(team + (" (primary)" if m == t["primary"] else ""))
+            found = self._org(lambda oc: oc.lookup(list(roles)))
+            people = []
+            for name, team_list in roles.items():
+                e = found.get(name) or {}
+                p = dict(e.get("person") or {"display_name": name})
+                p["chain"] = [e["manager"]] if e.get("manager") else []
+                p["team"] = ", ".join(team_list)
+                p["note"] = e.get("note", "" if e else "not a person")
+                people.append(p)
+            people.sort(key=lambda p: ("(primary)" not in p["team"], p["team"]))
+            return people
+
+        self.notebook.select(self.org_frame)
+        self.worker.submit(f"Looking up the team of {order}", job,
+                           lambda people: self._oc_fill(people, f"Team of order {order}: {len(people)} people"),
+                           retry=True)
+
+    def _oc_fill(self, people, title):
+        self.oc_people = people
+        self.oc_title.configure(text=title.upper() if people else title)
+        self.oc_tree.delete(*self.oc_tree.get_children())
+        has_team = any(p.get("team") for p in people)
+        self.oc_tree.configure(displaycolumns=[c for c, _, _ in self.OC_COLUMNS if has_team or c != "team"])
+        for i, p in enumerate(people):
+            tags = ["odd"] if i % 2 else []
+            if not p.get("email"):
+                tags.append("missing")
+            self.oc_tree.insert("", "end", iid=str(i), tags=tags, values=(
+                p.get("display_name", ""), p.get("busi_title") or p.get("note", ""), p.get("dept_desc", ""),
+                p.get("country_descr", ""), p.get("team", ""), p.get("email", "")))
+        if people:
+            self.oc_tree.selection_set("0")
+        else:
+            self._oc_card_message(title)
+
+    def _oc_card_message(self, text):
+        for w in self.oc_card.winfo_children():
+            w.destroy()
+        tk.Label(self.oc_card, text=text, bg=CARD, fg=MUTED, font=(FONT, 10), wraplength=360,
+                 justify="left").pack(anchor="nw", pady=24)
+
+    def _oc_show(self):
+        sel = self.oc_tree.selection()
+        if not sel:
+            return
+        p = self.oc_people[int(sel[0])]
+        c = self.oc_card
+        for w in c.winfo_children():
+            w.destroy()
+        tk.Label(c, text=p.get("display_name", ""), bg=CARD, fg=INK, font=(FONT, 14, "bold"),
+                 anchor="w").pack(fill="x")
+        tk.Label(c, text=p.get("busi_title") or p.get("note", ""), bg=CARD, fg=MUTED, font=(FONT, 10),
+                 anchor="w", wraplength=380, justify="left").pack(fill="x", pady=(0, 10))
+        rows = [("Email", p.get("email")), ("Phone", p.get("phone")), ("Mobile", p.get("mobile")),
+                ("Department", p.get("dept_desc")),
+                ("Location", ", ".join(x for x in (p.get("city"), p.get("country_descr")) if x)),
+                ("Company", p.get("vendor_name")), ("GOLD team", p.get("team")), ("CUID", p.get("cuid"))]
+        grid = tk.Frame(c, background=CARD)
+        grid.pack(fill="x")
+        for r, (label, value) in enumerate((l, v) for l, v in rows if v):
+            tk.Label(grid, text=label, bg=CARD, fg=MUTED, font=(FONT, 9), anchor="nw").grid(
+                row=r, column=0, sticky="nw", pady=2)
+            v = tk.Entry(grid, font=(FONT, 10), relief="flat", readonlybackground=CARD, fg=INK,
+                         highlightthickness=0, borderwidth=0)
+            v.insert(0, value)
+            v.configure(state="readonly")
+            v.grid(row=r, column=1, sticky="ew", padx=(14, 0), pady=2)
+        grid.columnconfigure(1, weight=1)
+
+        btns = tk.Frame(c, background=CARD)
+        btns.pack(fill="x", pady=(10, 4))
+        if p.get("email"):
+            ttk.Button(btns, text="✉  Email", command=lambda: os.startfile(f"mailto:{p['email']}")).pack(side="left")
+            ttk.Button(btns, text="Copy email", command=lambda: self._oc_copy(p["email"])).pack(side="left", padx=6)
+        ttk.Button(btns, text="Copy all", command=lambda: self._oc_copy(self._oc_details(p))).pack(side="left")
+
+        chain = p.get("chain") or []
+        if chain:
+            tk.Label(c, text="REPORTS TO", bg=CARD, fg=MUTED, font=(FONT, 8, "bold"), anchor="w").pack(
+                fill="x", pady=(14, 4))
+            for level, m in enumerate(chain):
+                row = tk.Frame(c, background=CARD)
+                row.pack(fill="x", pady=1)
+                tk.Frame(row, background=ORANGE if level == 0 else LINE, width=3).pack(side="left", fill="y",
+                                                                                     padx=(level * 14, 10))
+                txt = tk.Frame(row, background=CARD)
+                txt.pack(side="left", fill="x", expand=True, pady=3)
+                name = tk.Label(txt, text=m.get("display_name", ""), bg=CARD, fg=ORANGE_DARK,
+                                font=(FONT, 10, "bold" if level == 0 else "normal"), anchor="w", cursor="hand2")
+                name.pack(fill="x")
+                name.bind("<Button-1>", lambda e, m=m: self._oc_search(m.get("email") or m.get("display_name")))
+                tk.Label(txt, text=m.get("busi_title", ""), bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w",
+                         wraplength=340, justify="left").pack(fill="x")
+
+    @staticmethod
+    def _oc_details(p):
+        lines = [p.get("display_name", ""), p.get("busi_title", "")]
+        for label, key in (("Email", "email"), ("Phone", "phone"), ("Mobile", "mobile"),
+                           ("Department", "dept_desc"), ("Country", "country_descr")):
+            if p.get(key):
+                lines.append(f"{label}: {p[key]}")
+        if p.get("chain"):
+            m = p["chain"][0]
+            lines.append(f"Manager: {m.get('display_name', '')} ({m.get('email', '')})")
+        return "\n".join(x for x in lines if x)
+
+    def _oc_copy(self, text):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.log("Copied.")
+
     # ----- Ask GOLD tab (AI assistant)
     CHAT_BG = "#F7F8FA"
     ASK_INDENT = 40  # answers line up under the assistant's name, right of its avatar
@@ -1999,6 +2238,9 @@ class App(tk.Tk):
         self.members = tk.Listbox(rf, font=("Segoe UI", 10), activestyle="none",
                                   selectbackground=ORANGE, borderwidth=1, highlightthickness=0)
         self.members.pack(fill="both", expand=True, pady=(4, 0))
+        self.members.bind("<Double-Button-1>", self._oc_lookup_member)
+        ttk.Label(rf, text="Double-click a member to see their email, job and manager (Org Chart)",
+                  style="Muted.TLabel", font=(FONT, 8)).pack(anchor="w", pady=(4, 0))
         panes.add(rf, weight=2)
 
     def _show(self, view):
