@@ -1,5 +1,11 @@
 # GOLD Express - what's new
 
+## 1.9.1
+- Fixed: the **Update** button could stop responding when it was clicked while GOLD Express was
+  still busy (e.g. connecting to GOLD at start-up). Now the update starts as soon as the current
+  action has finished.
+- Unexpected errors are now shown (and saved to gold_app_error.log) instead of nothing happening.
+
 ## 1.9.0
 - New **Org Chart** tab: find anyone at Orange Business by name, last name, email or CUID and see
   their email, job, department, phone, location and who they report to (click a manager to open

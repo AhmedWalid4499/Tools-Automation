@@ -314,6 +314,7 @@ class App(tk.Tk):
 
         self._style()
         self._build()
+        self.report_callback_exception = self._callback_error
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._pump)
         self.online = True
@@ -398,30 +399,44 @@ class App(tk.Tk):
 
     def _offer_update(self, rel):
         if getattr(self, "_updating", False):
-            return  # an update is already being offered / downloaded
+            return  # the update question is open, or the update is downloading
+        if self.busy:  # e.g. still connecting to GOLD: offer the update as soon as that has finished
+            if not getattr(self, "_update_waiting", False):
+                self._update_waiting = True
+                self.update_btn.configure(text="⬆  Update when ready...")
+                self.log("The update will start as soon as the current action has finished.")
+                self._update_when_idle(rel)
+            return
         self._updating = True
+        started = False
         try:
-            self._offer_update_now(rel)
+            started = self._offer_update_now(rel)
         finally:
-            if not self.busy:  # not downloading: allow another try later
+            if not started:  # answered No / not possible: the button works again
                 self._updating = False
 
+    def _update_when_idle(self, rel):
+        if self.busy:
+            self.after(500, self._update_when_idle, rel)
+            return
+        self._update_waiting = False
+        self.update_btn.configure(text=f"⬆  Update to {rel['version']}")
+        self._offer_update(rel)
+
     def _offer_update_now(self, rel):
+        """True when the download has started."""
         notes = rel["notes"][:900] + ("..." if len(rel["notes"]) > 900 else "")
         if not gu.can_self_update():
             messagebox.showinfo(APP_NAME, f"Version {rel['version']} is available.\n\nThis copy runs from the "
                                           f"source code - update it with 'git pull'.\n\n{gu.RELEASES_PAGE}")
-            return
-        if self.busy:
-            messagebox.showinfo(APP_NAME, "Please wait until the current action has finished, then update.")
-            return
+            return False
         if not messagebox.askyesno(
                 f"{APP_NAME} update",
                 f"Version {rel['version']} is available (you have {__version__}).\n\n"
                 + (f"What's new:\n{notes}\n\n" if notes else "")
                 + f"Update now? {APP_NAME} will close, update itself and open again "
                   "(about a minute). Your settings and files are kept."):
-            return
+            return False
 
         def progress(done, total):
             pct = f"{done * 100 // total}%" if total else f"{done // 1_000_000} MB"
@@ -431,7 +446,7 @@ class App(tk.Tk):
             try:
                 setup = gu.download(rel, progress)
             except Exception as e:
-                self.ui(lambda e=e: (self.set_idle(), messagebox.showerror(
+                self.ui(lambda e=e: (setattr(self, "_updating", False), self.set_idle(), messagebox.showerror(
                     APP_NAME, f"The update could not be downloaded:\n{e}\n\nTry again later or download it "
                               f"from\n{rel['page']}")))
                 return
@@ -439,11 +454,13 @@ class App(tk.Tk):
             self.ui(lambda: self._install_update(setup))
         self.set_busy("Downloading update")
         threading.Thread(target=work, daemon=True).start()
+        return True
 
     def _install_update(self, setup):
         try:
             gu.run_installer(setup)
         except Exception as e:
+            self._updating = False
             self.set_idle()
             messagebox.showerror(APP_NAME, f"The update could not start:\n{e}")
             return
@@ -489,6 +506,17 @@ class App(tk.Tk):
             b.state(["!disabled"])
         self.configure(cursor="")
         self._refresh_action_state()
+
+    def _callback_error(self, exc, err, tb):
+        """An error in a button / window callback: the packaged app has no console, so log it and say so
+        instead of silently doing nothing."""
+        text = "".join(traceback.format_exception(exc, err, tb))
+        try:
+            (HERE / "gold_app_error.log").write_text(text, encoding="utf-8")
+        except OSError:
+            pass
+        self.log(f"ERROR: {err}")
+        messagebox.showerror(APP_NAME, f"Something went wrong:\n\n{err}\n\nDetails: {HERE / 'gold_app_error.log'}")
 
     def job_failed(self, label, err, tb):
         self.set_idle()
