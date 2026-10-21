@@ -31,6 +31,7 @@ import gold_names as gn
 import gold_orgchart as goc
 import gold_overview as go
 import gold_teams as gt
+import gold_ui as gui
 import gold_update as gu
 from gold_grid import EditGrid
 import open_order as oo
@@ -41,15 +42,17 @@ SETTINGS_FILE = HERE / "gold_app_settings.json"
 AI_KEY_CACHE = HERE / "ai_key.bin"  # the team's AI key, encrypted for this Windows user
 OC_CACHE = HERE / "orgchart_cache.json"  # Org Chart lookups of GOLD team members (kept 7 days)
 
-# Palette (Orange-style: black header, orange accent, light grey canvas)
-ORANGE = "#FF7900"
-ORANGE_DARK = "#E06A00"
-ORANGE_SOFT = "#FFE8D6"
-INK = "#1F2328"
-MUTED = "#6B7280"
-CANVAS = "#F3F4F6"
-CARD = "#FFFFFF"
-LINE = "#E2E4E8"
+# Palette (warm light background, white rounded panels, orange accent) - see gold_ui
+ORANGE = gui.ORANGE
+ORANGE_DARK = gui.ORANGE_DARK
+ORANGE_SOFT = gui.ORANGE_SOFT
+INK = gui.INK
+MUTED = gui.MUTED
+FAINT = gui.FAINT
+BG = gui.BG
+CANVAS = BG
+CARD = gui.CARD
+LINE = gui.LINE
 HEADER = "#111111"
 GREEN = "#1E7B34"
 RED = "#C62828"
@@ -360,8 +363,12 @@ class App(tk.Tk):
             self.last_msg.configure(text=msg if len(msg) < 140 else msg[:137] + "...")
         self.ui(add)
 
+    # status pill colours on the light background, by the colour callers give for the state
+    PILL = {"#7BD88F": ("#1E7B34", "#E4F4E8"), "#FF8A80": ("#C62828", "#FDE7E7")}
+
     def _set_pill(self, text, fg, bg):
-        self.status.configure(text=f"  ●  {text}  ", fg=fg, bg=bg)
+        fg, bg = self.PILL.get(fg, (ORANGE_DARK, ORANGE_SOFT))
+        self.status.configure(text=f"●  {text}", fg=fg, bg=bg)
 
     def set_busy(self, label):
         self.busy = True
@@ -603,6 +610,11 @@ class App(tk.Tk):
                      arrowsize=12)
         st.configure("Horizontal.TScrollbar", background="#E5E7EB", troughcolor=CARD, borderwidth=0,
                      arrowsize=12)
+        # Softer tables, rounded buttons and fields
+        st.configure("Treeview", rowheight=30, foreground=INK)
+        st.configure("Treeview.Heading", background="#FAF8F5", foreground=MUTED, padding=(8, 7))
+        st.map("Treeview.Heading", background=[("active", "#F4F1EC")])
+        gui.style_rounded(st, self)
 
     def _btn(self, parent, text, cmd, style=None, **grid):
         b = ttk.Button(parent, text=text, command=cmd, style=style or "TButton")
@@ -616,58 +628,87 @@ class App(tk.Tk):
 
     # ----- layout
     def _build(self):
-        # Header band
-        head = tk.Frame(self, background=HEADER, height=58)
-        head.pack(fill="x")
-        head.pack_propagate(False)
-        logo = tk.Label(head, text="GX", bg=ORANGE, fg="white", font=(FONT, 12, "bold"), width=3)
-        logo.pack(side="left", padx=(18, 10), pady=12)
-        tk.Label(head, text=APP_NAME, bg=HEADER, fg="white", font=(FONT, 15, "bold")).pack(side="left")
-        tk.Label(head, text="   Global Order Lifecycle Delivery", bg=HEADER, fg="#9CA3AF",
-                 font=(FONT, 10)).pack(side="left", pady=(4, 0))
-        ttk.Button(head, text="⚙  Settings", style="Header.TButton",
-                   command=self._open_settings).pack(side="right", padx=(8, 18))
-        self.update_btn = ttk.Button(head, text="⟳  Check for updates", style="Header.TButton",
-                                     command=lambda: self._check_updates(quiet=False))
-        self.update_btn.pack(side="right", padx=(8, 0))
-        self.status = tk.Label(head, font=(FONT, 9, "bold"), bd=0, padx=4, pady=4)
-        self.status.pack(side="right")
-        self._set_pill("Ready", "#7BD88F", "#2A2A2A")
-        tk.Frame(self, background=ORANGE, height=3).pack(fill="x")
+        # Left: side menu. Right: page title bar, the page in a rounded panel, status line.
+        self.configure(background=BG)
+        right = tk.Frame(self, background=BG)
+        side = tk.Frame(self, background=CARD)
+        side.pack(side="left", fill="y")
+        right.pack(side="left", fill="both", expand=True)
 
-        # Status bar (bottom): last message + activity toggle; the log panel above it
-        bottom = tk.Frame(self, background=CARD, highlightthickness=1, highlightbackground=LINE)
-        bottom.pack(side="bottom", fill="x")
-        self.last_msg = tk.Label(bottom, text="Ready.", bg=CARD, fg=MUTED, anchor="w", font=(FONT, 9))
-        self.last_msg.pack(side="left", fill="x", expand=True, padx=12, pady=5)
-        self.log_toggle = tk.Label(bottom, text="Show activity ▲", bg=CARD, fg=ORANGE, cursor="hand2",
+        # Page title bar
+        top = tk.Frame(right, background=BG, padx=24, pady=16)
+        top.pack(fill="x")
+        titles = tk.Frame(top, background=BG)
+        titles.pack(side="left")
+        self.page_title = tk.Label(titles, text="", bg=BG, fg=INK, font=("Segoe UI Light", 20), anchor="w")
+        self.page_title.pack(anchor="w")
+        self.page_sub = tk.Label(titles, text="", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w")
+        self.page_sub.pack(anchor="w")
+        self.status = tk.Label(top, font=(FONT, 9, "bold"), bd=0, padx=12, pady=5)
+        self.status.pack(side="right", pady=(4, 0))
+        self._set_pill("Ready", "#7BD88F", "#2A2A2A")
+
+        # Status line (bottom): last message + activity toggle; the log panel above it
+        bottom = tk.Frame(right, background=BG)
+        bottom.pack(side="bottom", fill="x", padx=24, pady=(0, 10))
+        self.last_msg = tk.Label(bottom, text="Ready.", bg=BG, fg=MUTED, anchor="w", font=(FONT, 9))
+        self.last_msg.pack(side="left", fill="x", expand=True)
+        self.log_toggle = tk.Label(bottom, text="Show activity ▲", bg=BG, fg=ORANGE, cursor="hand2",
                                    font=(FONT, 9, "bold"))
-        self.log_toggle.pack(side="right", padx=12)
+        self.log_toggle.pack(side="right")
         self.log_toggle.bind("<Button-1>", lambda e: self._toggle_log())
-        self.log_frame = tk.Frame(self, background=CARD)
+        self.log_frame = tk.Frame(right, background=BG, padx=24)
         self.log_box = tk.Text(self.log_frame, height=7, state="disabled", font=("Consolas", 9),
-                               background="#FAFAFA", foreground=INK, relief="flat", padx=10, pady=6)
+                               background=CARD, foreground=INK, relief="flat", padx=10, pady=6,
+                               highlightthickness=1, highlightbackground=LINE)
         self.log_box.pack(fill="both", expand=True)
 
-        # Main area: two tabs
-        root = ttk.Frame(self, padding=(16, 10, 16, 10), style="Canvas.TFrame")
-        root.pack(fill="both", expand=True)
-        self.notebook = ttk.Notebook(root)
-        self.notebook.pack(fill="both", expand=True)
-        overview = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
-        self.notebook.add(overview, text="Overview")
-        explorer = tk.Frame(self.notebook, background=CARD, padx=14, pady=12)
-        self.notebook.add(explorer, text="Order explorer")
-        rtdd = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
-        self.notebook.add(rtdd, text="Revised Target Date")
-        assign = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
-        self.notebook.add(assign, text="Bulk Order Assignment")
-        names = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
-        self.notebook.add(names, text="DPM Names")
-        org = self.org_frame = tk.Frame(self.notebook, background=CARD)
-        self.notebook.add(org, text="Org Chart")
-        ask = tk.Frame(self.notebook, background=CARD, padx=16, pady=12)
-        self.notebook.add(ask, text="✦ Ask GOLD")
+        # The page, in a rounded white panel
+        panel = gui.Panel(right, radius=18)
+        panel.pack(fill="both", expand=True, padx=(16, 24), pady=(0, 10))
+        content_host = panel.body
+
+        # Side menu: logo, pages by section, then updates / settings
+        nav = self.notebook = gui.SideNav(side, content_host, on_change=self._page_changed)
+        nav.pack(fill="y", expand=True)
+        brand = tk.Frame(nav.top, background=CARD, padx=20, pady=20)
+        brand.pack(fill="x")
+        self._logo_img = self._asset_image("logo_36.png")
+        if self._logo_img:
+            tk.Label(brand, image=self._logo_img, bg=CARD).pack(side="left")
+        words = tk.Frame(brand, background=CARD)
+        words.pack(side="left", padx=(10, 0))
+        name = tk.Frame(words, background=CARD)
+        name.pack(anchor="w")
+        tk.Label(name, text="GOLD", bg=CARD, fg=INK, font=(FONT, 13, "bold")).pack(side="left")
+        tk.Label(name, text=" Express", bg=CARD, fg=ORANGE, font=(FONT, 13)).pack(side="left")
+        tk.Label(words, text="Order Lifecycle Delivery", bg=CARD, fg=FAINT, font=(FONT, 8)).pack(anchor="w")
+
+        def page(pad=True):
+            return tk.Frame(content_host, background=CARD, padx=8 if pad else 0, pady=4 if pad else 0)
+
+        overview, explorer, ask = page(), page(), page(False)
+        rtdd, assign = page(), page()
+        org, names = page(False), page()
+        self.org_frame = org
+        nav.section("Orders")
+        nav.add(overview, "Overview", "", "Key facts and delivery status of your orders")
+        nav.add(explorer, "Order explorer", "", "Open an order, browse its tabs, export and download")
+        nav.add(ask, "Ask GOLD", "", "AI assistant - ask about deadlines, pricing, sites and people")
+        nav.section("Bulk updates")
+        nav.add(rtdd, "Revised Target Date", "", "Add the Revised Target Date milestone to many orders")
+        nav.add(assign, "Order assignment", "", "Make a DPM the primary STM of many orders")
+        nav.section("People")
+        nav.add(org, "Org Chart", "", "Find anyone at Orange Business and who they report to")
+        nav.add(names, "DPM names", "", "The DPM list used by Order assignment")
+
+        self.update_btn = ttk.Button(nav.bottom, text="↻  Check for updates", style="Side.TButton",
+                                     command=lambda: self._check_updates(quiet=False))
+        self.update_btn.pack(fill="x", pady=(0, 2))
+        ttk.Button(nav.bottom, text="⚙  Settings", style="Side.TButton",
+                   command=self._open_settings).pack(fill="x")
+        tk.Label(nav.bottom, text=f"Version {__version__}  ·  © {AUTHOR}", bg=CARD, fg=FAINT,
+                 font=(FONT, 8), anchor="w").pack(fill="x", padx=12, pady=(10, 0))
         self.bulk_stop_flag = threading.Event()
         self._build_overview_tab(overview)
         self._build_explorer(explorer)
@@ -678,12 +719,22 @@ class App(tk.Tk):
         self._build_ask_tab(ask)
         self._refresh_action_state()
 
+    def _page_changed(self, title, subtitle):
+        self.page_title.configure(text=title)
+        self.page_sub.configure(text=subtitle)
+
+    def _asset_image(self, name):
+        for base in (BUNDLE_DIR / "assets", Path(__file__).parent / "assets"):
+            if (base / name).exists():
+                return tk.PhotoImage(file=str(base / name), master=self)
+        return None
+
     def _toggle_log(self):
         if self.log_frame.winfo_ismapped():
             self.log_frame.pack_forget()
             self.log_toggle.configure(text="Show activity ▲")
         else:
-            self.log_frame.pack(side="bottom", fill="x")
+            self.log_frame.pack(side="bottom", fill="x", pady=(0, 6))
             self.log_toggle.configure(text="Hide activity ▼")
 
     def _build_explorer(self, f):
@@ -828,66 +879,76 @@ class App(tk.Tk):
               "Green": ("#1E7B34", "#E4F4E8"), "No date": ("#595959", "#EFEFEF")}
 
     def _build_overview_tab(self, f):
-        ttk.Label(f, text="Key facts and delivery status of one or more orders. Status is measured against "
-                          "the Revised Target Delivery Date (or the Initial one if not revised): "
-                          f"Red = passed, Amber = {go.AMBER_DAYS} days or less, Green = more.",
-                  style="Muted.TLabel", wraplength=1100, justify="left").pack(anchor="w")
-        bar = tk.Frame(f, background=CARD, pady=10)
+        bar = tk.Frame(f, background=CARD, pady=4)
         bar.pack(fill="x")
-        ttk.Label(bar, text="Gold order(s)", style="Head.TLabel").pack(side="left")
         self.ov_input = tk.StringVar()
-        ent = ttk.Entry(bar, textvariable=self.ov_input, width=46, font=(FONT, 11))
-        ent.pack(side="left", padx=8)
+        ent = ttk.Entry(bar, textvariable=self.ov_input, width=20, font=(FONT, 11))
+        ent.pack(side="left", fill="x", expand=True)
         ent.bind("<Return>", lambda e: self._ov_run())
-        self._btn(bar, "Show overview", self._ov_run, "Accent.TButton").pack(side="left")
-        self._btn(bar, "↻ Refresh", lambda: self._ov_run(refresh=True)).pack(side="left", padx=(6, 0))
-        ttk.Label(bar, text="  one or more, separated by spaces or commas", style="Muted.TLabel").pack(side="left")
-        self.ov_export_btn = self._btn(bar, "Export to Excel", self._ov_export)
-        self.ov_export_btn.pack(side="right")
+        self._btn(bar, "Show overview", self._ov_run, "Accent.TButton").pack(side="left", padx=(8, 0))
+        self._btn(bar, "↻  Refresh", lambda: self._ov_run(refresh=True)).pack(side="left", padx=(6, 0))
+        self.ov_export_btn = self._btn(bar, "⤓  Export to Excel", self._ov_export)
+        self.ov_export_btn.pack(side="left", padx=(6, 0))
+        tk.Label(f, text="One or more GOLD orders, separated by spaces or commas.  Status against the revised "
+                         f"(or initial) target date: Red = passed, Amber = {go.AMBER_DAYS} days or less, "
+                         "Green = more.", bg=CARD, fg=FAINT, font=(FONT, 8), anchor="w", justify="left",
+                 wraplength=900).pack(fill="x", pady=(4, 10))
+
+        # Summary of all orders shown: colourful counters
+        strip = tk.Frame(f, background=CARD)
+        strip.pack(fill="x", pady=(0, 12))
+        self.ov_summary = {}
+        for col, (key, caption, icon, palette) in enumerate((
+                ("all", "Orders", "", "lavender"), ("Green", "On track", "", "mint"),
+                ("Amber", "Due soon", "", "amber"), ("Red", "Late", "", "rose"))):
+            card = gui.StatCard(strip, caption, icon, palette, sub_lines=1, big_size=22)
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 10, 0))
+            strip.columnconfigure(col, weight=1, uniform="ovsum")
+            self.ov_summary[key] = card
+        self._ov_summary_set({})
 
         body = ttk.Panedwindow(f, orient="horizontal")
         body.pack(fill="both", expand=True)
         left = tk.Frame(body, background=CARD)
-        ttk.Label(left, text="ORDERS", style="CardMuted.TLabel", font=(FONT, 8, "bold")).pack(anchor="w", pady=(0, 6))
+        tk.Label(left, text="ORDERS", bg=CARD, fg=FAINT, font=(FONT, 8, "bold")).pack(anchor="w", pady=(0, 6))
         lf = tk.Frame(left, background=CARD, highlightthickness=1, highlightbackground=LINE)
         lf.pack(fill="both", expand=True)
         self.ov_list = ttk.Treeview(lf, columns=("order", "status", "days", "lead"), show="headings",
                                     selectmode="browse")
-        for c, w, t in [("order", 100, "Order"), ("status", 60, "Status"), ("days", 100, "Days left"),
-                        ("lead", 80, "Lead time")]:
+        for c, w, t in [("order", 110, "Order"), ("status", 80, "Status"), ("days", 130, "Days left"),
+                        ("lead", 90, "Lead time")]:
             self.ov_list.heading(c, text=t, anchor="w")
-            self.ov_list.column(c, width=w, anchor="w", stretch=c == "days")
+            self.ov_list.column(c, width=w, minwidth=w, anchor="w", stretch=c == "days")
         for k, (fg, bg) in self.RAG_UI.items():
             self.ov_list.tag_configure(k, foreground=fg, background=bg)
         self.ov_list.tag_configure("err", foreground=RED)
         self.ov_list.pack(fill="both", expand=True)
         self.ov_list.bind("<<TreeviewSelect>>", lambda e: self._ov_show_selected())
-        body.add(left, weight=0)
+        body.add(left, weight=2)
 
-        right = tk.Frame(body, background=CARD, padx=14)
-        body.add(right, weight=1)
-        self.ov_title = ttk.Label(right, text="Enter an order to see its overview", style="CardHead.TLabel",
-                                  font=(FONT, 14, "bold"))
-        self.ov_title.pack(anchor="w")
-        # Cards: order value (big), delivery status, 120-day lead time
+        right = tk.Frame(body, background=CARD, padx=16)
+        body.add(right, weight=5)
+
+        def place_sash(e=None):  # room for the order list (~ a third), once the page has its size
+            if body.winfo_width() > 600:
+                body.sashpos(0, max(int(body.winfo_width() * 0.34), 380))
+                body.unbind("<Configure>")
+        body.bind("<Configure>", place_sash)
+        self.ov_title = tk.Label(right, text="Enter an order to see its overview", bg=CARD, fg=INK,
+                                 font=(FONT, 14, "bold"), anchor="w")
+        self.ov_title.pack(fill="x")
+        # Cards: order value, delivery status, 120-day lead time
         cards = tk.Frame(right, background=CARD)
-        cards.pack(fill="x", pady=(10, 10))
+        cards.pack(fill="x", pady=(10, 12))
         self.ov_cards = {}
-        for key, caption, weight in (("value", "ORDER TOTAL VALUE", 3), ("delivery", "DELIVERY STATUS", 2),
-                                     ("lead", "120-DAY LEAD TIME", 2)):
-            card = tk.Frame(cards, background="#F7F7F8", padx=16, pady=12, highlightthickness=1,
-                            highlightbackground=LINE)
-            card.pack(side="left", fill="both", expand=True, padx=(0, 10) if key != "lead" else 0)
-            cap = tk.Label(card, text=caption, font=(FONT, 8, "bold"), anchor="w", background="#F7F7F8",
-                           foreground=MUTED)
-            cap.pack(fill="x")
-            big = tk.Label(card, text="-", font=(FONT, 22 if key == "value" else 16, "bold"), anchor="w",
-                           background="#F7F7F8", foreground=INK)
-            big.pack(fill="x", pady=(2, 0))
-            sub = tk.Label(card, text="", font=(FONT, 9), anchor="w", justify="left", background="#F7F7F8",
-                           foreground=MUTED, wraplength=330)
-            sub.pack(fill="x")
-            self.ov_cards[key] = (card, cap, big, sub)
+        for col, (key, caption, icon) in enumerate((("value", "Order total value", ""),
+                                                    ("delivery", "Delivery status", ""),
+                                                    ("lead", "120-day lead time", ""))):
+            card = gui.StatCard(cards, caption, icon, "sun" if key == "value" else "grey", sub_lines=2,
+                                big_size=20)
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 10, 0))
+            cards.columnconfigure(col, weight=1, uniform="ovcards")
+            self.ov_cards[key] = card
         self.ov_banner = tk.Label(right, text="", anchor="w", font=(FONT, 11, "bold"), background=CARD)
         tf = tk.Frame(right, background=CARD)
         tf.pack(fill="both", expand=True)
@@ -922,6 +983,7 @@ class App(tk.Tk):
                                    + (f"\n\nNot an order number: {', '.join(bad)}" if bad else ""))
             return
         self.ov_results, self.ov_errors = {}, {}
+        self._ov_summary_set({})
         self.ov_list.delete(*self.ov_list.get_children())
         now = time.time()
         todo = []
@@ -1023,6 +1085,7 @@ class App(tk.Tk):
     def _ov_listed(self, o, ov):
         days = "" if ov["days_left"] is None else ov["rag_text"]
         self.ov_list.item(o, values=(o, ov["rag"], days, ov["lt_rag"]), tags=(ov["rag"],))
+        self._ov_summary_set({k: v["rag"] for k, v in self.ov_results.items()})
         if not self.ov_list.selection():
             self.ov_list.selection_set(o)
 
@@ -1072,15 +1135,18 @@ class App(tk.Tk):
         t.configure(state="disabled")
 
     def _ov_card(self, key, big_text, sub_text, rag):
-        card, cap, big, sub = self.ov_cards[key]
-        fg, bg = self.RAG_UI[rag] if rag else (INK, "#F7F7F8")
-        if key == "value" and rag is None:
-            fg, bg = ORANGE, "#FFF4EB"  # the value card stands out in orange
-        for wdg in (card, cap, big, sub):
-            wdg.configure(background=bg)
-        card.configure(highlightbackground=fg if rag or key == "value" else LINE)
-        big.configure(text=big_text, foreground=fg)
-        sub.configure(text=sub_text)
+        palette = "sun" if key == "value" else gui.RAG_PALETTE.get(rag, "grey")
+        self.ov_cards[key].set(big_text.replace("● ", ""), sub_text, palette)
+
+    def _ov_summary_set(self, rags):
+        """rags: order -> RAG of every order read; fills the counters above the list."""
+        n = len(rags)
+        counts = {k: sum(1 for r in rags.values() if r == k) for k in ("Green", "Amber", "Red")}
+        self.ov_summary["all"].set(str(n), "orders read" if n != 1 else "order read")
+        for key, text in (("Green", "more than {d} days left"), ("Amber", "{d} days or less left"),
+                          ("Red", "target date passed")):
+            pct = f"{counts[key] * 100 // n}% · " if n else ""
+            self.ov_summary[key].set(str(counts[key]), pct + text.format(d=go.AMBER_DAYS))
 
     def _ov_export(self):
         order_list = [o for o in self.ov_list.get_children() if o in self.ov_results]
@@ -1103,14 +1169,18 @@ class App(tk.Tk):
     def _grid_toolbar(self, f, title, hint, grid_attr):
         tb = tk.Frame(f, background=CARD)
         tb.pack(fill="x", pady=(6, 4))
-        ttk.Label(tb, text=title, style="Head.TLabel").pack(side="left")
-        ttk.Label(tb, text="   " + hint, style="Muted.TLabel").pack(side="left")
+        words = tk.Frame(tb, background=CARD)
+        words.pack(side="left", fill="x", expand=True)
+        ttk.Label(words, text=title, style="Head.TLabel").pack(anchor="w")
+        ttk.Label(words, text=hint, style="Muted.TLabel", font=(FONT, 8)).pack(anchor="w")
         grid = lambda: getattr(self, grid_attr)
         ttk.Button(tb, text="Clear all", command=lambda: grid().clear()).pack(side="right")
         ttk.Button(tb, text="+ 10 rows", command=lambda: grid().add_rows(10)).pack(side="right", padx=4)
         ttk.Button(tb, text="Paste from Excel", command=lambda: self._grid_paste(grid())).pack(side="right")
         ttk.Button(tb, text="Load Excel/CSV...", command=lambda: self._grid_load(grid())).pack(
             side="right", padx=4)
+        words.pack_forget()  # packed again after the buttons: they keep their size, the hint gets the rest
+        words.pack(side="left", fill="x", expand=True)
 
     def _grid_paste(self, grid):
         n = grid.paste()
@@ -1203,7 +1273,8 @@ class App(tk.Tk):
     # ----- Revised Target Date tab
     def _build_rtdd_tab(self, f):
         ttk.Label(f, text="Adds a 'Revised Target Date' milestone (Milestones > Create new) to each order "
-                          "in the table, with its Target Date and reason.", style="Muted.TLabel").pack(anchor="w")
+                          "in the table, with its Target Date and reason.", style="Muted.TLabel",
+                  wraplength=900, justify="left").pack(anchor="w")
         opts = tk.Frame(f, background=CARD, pady=10)
         opts.pack(fill="x")
         ttk.Label(opts, text="Reason type").grid(row=0, column=0, sticky="w")
@@ -1319,7 +1390,7 @@ class App(tk.Tk):
     def _build_assign_tab(self, f):
         ttk.Label(f, text="Makes the chosen DPM the primary STM of each order (Teams > Manage Teams > STM), "
                           "then saves the teams. Pick names from the list - manage it in the DPM Names tab.",
-                  style="Muted.TLabel").pack(anchor="w")
+                  style="Muted.TLabel", wraplength=900, justify="left").pack(anchor="w")
         opts = tk.Frame(f, background=CARD, pady=10)
         opts.pack(fill="x")
         ttk.Label(opts, text="For empty cells use", style="Muted.TLabel").pack(side="left")
@@ -1402,7 +1473,7 @@ class App(tk.Tk):
     def _build_names_tab(self, f):
         ttk.Label(f, text="The DPMs (STMs) offered in Bulk Order Assignment, with their names as they appear in "
                           "GOLD. Add, edit or remove names; the list is saved on this computer.",
-                  style="Muted.TLabel").pack(anchor="w")
+                  style="Muted.TLabel", wraplength=900, justify="left").pack(anchor="w")
         tb = tk.Frame(f, background=CARD, pady=10)
         tb.pack(fill="x")
         self._btn(tb, "+ Add name", self._names_add, "Accent.TButton").pack(side="left")
@@ -1661,16 +1732,6 @@ class App(tk.Tk):
 
     def _build_org_tab(self, f):
         f.configure(padx=0, pady=0)
-        head = tk.Frame(f, background=CARD, padx=20, pady=12)
-        head.pack(fill="x")
-        tk.Label(head, text="OC", bg=ORANGE, fg="white", font=(FONT, 10, "bold"), width=3, pady=3).pack(side="left")
-        titles = tk.Frame(head, background=CARD)
-        titles.pack(side="left", padx=(10, 0))
-        tk.Label(titles, text="Org Chart", bg=CARD, fg=INK, font=(FONT, 13, "bold")).pack(anchor="w")
-        tk.Label(titles, text="Find anyone at Orange Business by name, last name, email or CUID: email, job, "
-                              "phone and who they report to", bg=CARD, fg=MUTED, font=(FONT, 9)).pack(anchor="w")
-        tk.Frame(f, background=LINE, height=1).pack(fill="x")
-
         bar = tk.Frame(f, background=CARD, padx=20, pady=12)
         bar.pack(fill="x")
         self.oc_query = tk.StringVar()
@@ -1775,7 +1836,7 @@ class App(tk.Tk):
 
     def _oc_fill(self, people, title):
         self.oc_people = people
-        self.oc_title.configure(text=title.upper() if people else title)
+        self.oc_title.configure(text=title.upper() if people else "")
         self.oc_tree.delete(*self.oc_tree.get_children())
         has_team = any(p.get("team") for p in people)
         self.oc_tree.configure(displaycolumns=[c for c, _, _ in self.OC_COLUMNS if has_team or c != "team"])
@@ -1868,7 +1929,7 @@ class App(tk.Tk):
         self.log("Copied.")
 
     # ----- Ask GOLD tab (AI assistant)
-    CHAT_BG = "#F7F8FA"
+    CHAT_BG = "#FAF8F5"
     ASK_INDENT = 40  # answers line up under the assistant's name, right of its avatar
     # (title, description, question) - "{order}" is the order open in the Order explorer
     ASK_SUGGESTIONS = (("Deadlines", "Target dates, milestones, lead time",
@@ -1881,16 +1942,13 @@ class App(tk.Tk):
                         "Who is working on {order}?"))
 
     def _build_ask_tab(self, f):
+        self.ask_frame = f
         f.configure(padx=0, pady=0)
         # Header: title + what it does | order in context, New chat
-        head = tk.Frame(f, background=CARD, padx=20, pady=12)
+        head = tk.Frame(f, background=CARD, padx=20, pady=10)
         head.pack(fill="x")
-        tk.Label(head, text="✦", bg=ORANGE, fg="white", font=(FONT, 12, "bold"), width=2).pack(side="left")
-        titles = tk.Frame(head, background=CARD)
-        titles.pack(side="left", padx=(10, 0))
-        tk.Label(titles, text="Ask GOLD", bg=CARD, fg=INK, font=(FONT, 13, "bold")).pack(anchor="w")
-        tk.Label(titles, text="AI assistant · reads GOLD live for you, never changes anything", bg=CARD,
-                 fg=MUTED, font=(FONT, 9)).pack(anchor="w")
+        tk.Label(head, text="Reads GOLD and the Org Chart live for you - it never changes anything.", bg=CARD,
+                 fg=MUTED, font=(FONT, 9)).pack(side="left")
         self._btn(head, "＋  New chat", self._ask_new).pack(side="right")
         self.ask_chip = tk.Label(head, bg=ORANGE_SOFT, fg=ORANGE_DARK, font=(FONT, 9, "bold"), padx=10, pady=4)
         tk.Frame(f, background=LINE, height=1).pack(fill="x")
@@ -1902,13 +1960,13 @@ class App(tk.Tk):
         box = tk.Frame(foot, background=CARD, highlightthickness=1, highlightbackground="#CFD3D9",
                        highlightcolor=ORANGE)
         box.pack(fill="x")
+        self.ask_send = tk.Label(box, text="", bg=ORANGE, fg="white", font=(gui.ICONS, 13), width=4,
+                                 cursor="hand2")
+        self.ask_send.pack(side="right", fill="y", padx=6, pady=6)  # packed first: always visible
         self.ask_input = tk.Text(box, height=2, wrap="word", font=(FONT, 11), relief="flat", padx=12, pady=10,
                                  background=CARD, foreground=INK, insertbackground=INK, highlightthickness=0,
                                  borderwidth=0)
         self.ask_input.pack(side="left", fill="both", expand=True)
-        self.ask_send = tk.Label(box, text="➤", bg=ORANGE, fg="white", font=(FONT, 13, "bold"), width=3,
-                                 cursor="hand2")
-        self.ask_send.pack(side="right", fill="y", padx=6, pady=6)
         self.ask_send.bind("<Button-1>", lambda e: self._ask_send())
         self.ask_placeholder = tk.Label(box, bg=CARD, fg="#9CA3AF", font=(FONT, 11), cursor="xterm")
         self.ask_placeholder.place(x=14, y=10)
@@ -1966,11 +2024,7 @@ class App(tk.Tk):
         return typed if re.fullmatch(r"\d{2}-\d{5,8}", typed) else ""
 
     def _ask_tab_shown(self):
-        try:
-            on_ask = self.notebook.index("current") == self.notebook.index("end") - 1
-        except tk.TclError:
-            return
-        if not on_ask:
+        if self.notebook.current() is not self.ask_frame:
             return
         order = self._ask_context_order()
         if order != self.ask_order and not (self.chat and self.chat.messages) and not self.busy:
@@ -2029,8 +2083,9 @@ class App(tk.Tk):
 
         def write(t):
             t.insert("end", "\n\n", ("center",))
-            t.window_create("end", window=tk.Label(t, text="✦", bg=ORANGE, fg="white", font=(FONT, 18, "bold"),
-                                                   width=2))
+            self._ask_logo = self._ask_logo if getattr(self, "_ask_logo", None) else self._asset_image("logo_64.png")
+            t.window_create("end", window=tk.Label(t, image=self._ask_logo, bg=self.CHAT_BG) if self._ask_logo
+                            else tk.Label(t, text="✦", bg=ORANGE, fg="white", font=(FONT, 18, "bold"), width=2))
             t.tag_add("center", "end-2c")
             t.insert("end", "\nHow can I help with your orders?\n", ("hero",))
             t.insert("end", (f"Ask about order {order} (open in the Order explorer) or any other order."
@@ -2702,6 +2757,34 @@ if __name__ == "__main__":
     HERE.mkdir(parents=True, exist_ok=True)
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         selftest(sys.argv[2])
+    elif len(sys.argv) >= 2 and sys.argv[1] == "--ui-selftest":
+        # Open the window without GOLD, show every page, save a screenshot, close (for troubleshooting).
+        App._prewarm = lambda self: None
+        App._check_updates = lambda self, quiet=True: None
+        report = HERE / "ui_selftest_report.txt"
+        try:
+            app = App()
+
+            def tour(i=0):
+                if i < len(app.notebook.pages):
+                    app.notebook.select(i)
+                    app.after(300, tour, i + 1)
+                    return
+                app.notebook.select(0)
+                app.update()
+                try:
+                    from PIL import ImageGrab
+                    x, y = app.winfo_rootx(), app.winfo_rooty()
+                    ImageGrab.grab((x, y, x + app.winfo_width(), y + app.winfo_height())).save(
+                        HERE / "ui_selftest.png")
+                except Exception:
+                    pass
+                report.write_text(f"RESULT: OK - {len(app.notebook.pages)} pages shown", encoding="utf-8")
+                app._on_close()
+            app.after(800, tour)
+            app.mainloop()
+        except Exception:
+            report.write_text("RESULT: FAILED\n" + traceback.format_exc(), encoding="utf-8")
     elif len(sys.argv) >= 2 and sys.argv[1] == "--ask-selftest":
         ask_selftest(sharepoint="--sharepoint" in sys.argv)
     else:

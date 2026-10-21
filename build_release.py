@@ -124,6 +124,7 @@ def build_app():
         "--version-file", str(version_file()),
         "--add-binary", f"{geckodriver()};.",
         "--add-data", f"{HERE / 'gold_express.ico'};.",
+        "--add-data", f"{HERE / 'assets'};assets",  # logo images for the side menu and Ask GOLD
         *(["--add-data", f"{NAMES_DEFAULT};."] if NAMES_DEFAULT.exists() else []),
         "--collect-submodules", "selenium",
         "--collect-submodules", "anthropic",  # Ask GOLD (imported when the first question is sent)

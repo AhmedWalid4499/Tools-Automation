@@ -1,5 +1,14 @@
 # GOLD Express - what's new
 
+## 2.0.0
+- **A fresh new look.** A neat side menu replaces the tabs, grouped into Orders (Overview, Order
+  explorer, Ask GOLD), Bulk updates (Revised Target Date, Order assignment) and People (Org Chart,
+  DPM names), with icons and a clear page title.
+- **New logo** and app icon.
+- Light, warm design with rounded panels, rounded buttons and fields, and calmer tables.
+- **Colourful Overview**: counters for all orders read (On track / Due soon / Late) and gradient
+  cards for order value, delivery status and lead time.
+
 ## 1.9.1
 - Fixed: the **Update** button could stop responding when it was clicked while GOLD Express was
   still busy (e.g. connecting to GOLD at start-up). Now the update starts as soon as the current

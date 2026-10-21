@@ -27,3 +27,7 @@ __pycache__/
 *.key
 ai_key.bin
 orgchart_cache.json
+selftest_report.txt
+ask_selftest_report.txt
+ui_selftest_report.txt
+ui_selftest.png
