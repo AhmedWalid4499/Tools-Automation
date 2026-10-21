@@ -1,5 +1,16 @@
 # GOLD Express - what's new
 
+## 1.8.0
+- **Ask GOLD knows your order.** It answers about the order open (or typed) in the Order explorer:
+  just ask "what are the deadlines?" or "who is the STM?". One click on a suggestion card
+  (Deadlines, Pricing, Site, People) asks about that order straight away.
+- **New chat design**: your questions in bubbles, answers with clean tables, headings and a source
+  line, a "Copy answer" link under each answer (tables paste into Excel as columns), and a live
+  "Reading Milestones..." indicator while GOLD is read.
+- **No setup**: the first question gets the team's AI key automatically from the team SharePoint
+  folder (with your Windows / Orange sign-in) and keeps it on your PC, encrypted for your Windows
+  account. A synced copy of the folder is still used when present.
+
 ## 1.7.0
 - New **Ask GOLD** tab: an AI assistant (Claude) for your orders. Ask in plain words - "what are the
   deadlines of 10-1771012?", "show the pricing details", "site address and STM?", "compare these

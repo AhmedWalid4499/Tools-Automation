@@ -25,3 +25,4 @@ __pycache__/
 
 # AI key files must never be committed
 *.key
+ai_key.bin

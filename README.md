@@ -16,9 +16,11 @@ a hidden Firefox window, so routine order work takes a few clicks instead of man
 | **DPM Names** | Manage the DPM list used by Bulk Order Assignment, and check names in GOLD. |
 | **Ask GOLD** | Chat assistant (Claude): ask about deadlines, pricing, site address, people or notes of any order; answers come as tables and lists, read live from GOLD. |
 
-Ask GOLD needs the team's AI key file (`salto-buddy-team.key`, shared through the team's SharePoint
-folder). The key is never part of the app or this repository: GOLD Express reads it at run time from
-the synced OneDrive folder, or from the file chosen in Settings > AI assistant.
+Ask GOLD uses the team's AI key file (`salto-buddy-team.key` in the team's SharePoint folder). The key
+is never part of the app or this repository: on the first question GOLD Express downloads it from the
+team folder with the user's Windows / Orange sign-in (only team members can open the folder) and keeps
+it on the PC encrypted for that Windows user (DPAPI). A synced copy of the folder, or a file chosen in
+Settings > AI assistant, is used instead when present.
 
 GOLD Express only changes GOLD when you click **Run update** on the Revised Target Date or Bulk Order
 Assignment tab and confirm; everything else only reads GOLD. Both have a **Test only** mode.

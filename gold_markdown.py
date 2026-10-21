@@ -11,23 +11,34 @@ HEADING = re.compile(r"^(#{1,4})\s+(.*?)\s*#*$")
 
 
 def setup(text, font="Segoe UI", ink="#1F2328", muted="#6B7280", accent="#FF7900", soft="#FFE8D6",
-          line="#E2E4E8", code_bg="#F3F4F6"):
-    """Create the tags render() uses (call once per Text widget)."""
-    text.md = dict(font=font, ink=ink, muted=muted, accent=accent, soft=soft, line=line, code_bg=code_bg)
-    text.tag_configure("p", font=(font, 10), foreground=ink, spacing1=2, spacing3=4, lmargin1=4, lmargin2=4)
-    text.tag_configure("b", font=(font, 10, "bold"))
-    text.tag_configure("i", font=(font, 10, "italic"))
-    text.tag_configure("code", font=("Consolas", 9), background=code_bg)
-    text.tag_configure("h1", font=(font, 14, "bold"), foreground=ink, spacing1=10, spacing3=4)
-    text.tag_configure("h2", font=(font, 12, "bold"), foreground=ink, spacing1=10, spacing3=4)
-    text.tag_configure("h3", font=(font, 11, "bold"), foreground=accent, spacing1=8, spacing3=2)
-    text.tag_configure("quote", foreground=muted, lmargin1=18, lmargin2=18, font=(font, 10, "italic"))
-    text.tag_configure("pre", font=("Consolas", 9), background=code_bg, lmargin1=12, lmargin2=12,
-                       spacing1=0, spacing3=0)
+          line="#E2E4E8", code_bg="#F3F4F6", indent=0, size=10):
+    """Create the tags render() uses (call once per Text widget). indent: left margin of the
+    whole answer in pixels (e.g. to line it up under the assistant's name)."""
+    text.md = dict(font=font, ink=ink, muted=muted, accent=accent, soft=soft, line=line, code_bg=code_bg,
+                   indent=indent)
+    m = indent + 2
+    text.tag_configure("p", font=(font, size), foreground=ink, spacing1=2, spacing3=5, lmargin1=m, lmargin2=m,
+                       rmargin=24)
+    text.tag_configure("b", font=(font, size, "bold"))
+    text.tag_configure("i", font=(font, size, "italic"))
+    text.tag_configure("code", font=("Consolas", size - 1), background=code_bg)
+    text.tag_configure("h1", font=(font, size + 3, "bold"), foreground=ink, spacing1=12, spacing3=4,
+                       lmargin1=m, lmargin2=m)
+    text.tag_configure("h2", font=(font, size + 2, "bold"), foreground=ink, spacing1=12, spacing3=4,
+                       lmargin1=m, lmargin2=m)
+    text.tag_configure("h3", font=(font, size + 1, "bold"), foreground=ink, spacing1=10, spacing3=3,
+                       lmargin1=m, lmargin2=m)
+    text.tag_configure("quote", foreground=muted, lmargin1=m + 14, lmargin2=m + 14, font=(font, size, "italic"))
+    text.tag_configure("pre", font=("Consolas", size - 1), background=code_bg, lmargin1=m + 10,
+                       lmargin2=m + 10, spacing1=0, spacing3=0)
     for level in range(4):
-        text.tag_configure(f"li{level}", lmargin1=8 + 20 * level, lmargin2=26 + 20 * level,
-                           spacing1=1, spacing3=2, font=(font, 10), foreground=ink)
-    for tag in ("b", "i", "code"):  # inline styles win over the paragraph / list font
+        text.tag_configure(f"li{level}", lmargin1=m + 6 + 20 * level, lmargin2=m + 24 + 20 * level,
+                           spacing1=2, spacing3=3, font=(font, size), foreground=ink, rmargin=24)
+    text.tag_configure("mark", foreground=accent, font=(font, size, "bold"))
+    text.tag_configure("source", font=(font, size - 2), foreground=muted, lmargin1=m, lmargin2=m, spacing1=8,
+                       spacing3=2)
+    text.tag_configure("tbl", lmargin1=m, lmargin2=m, spacing1=4, spacing3=6)
+    for tag in ("b", "i", "code", "mark"):  # inline styles win over the paragraph / list font
         text.tag_raise(tag)
 
 
@@ -70,7 +81,7 @@ def _table(text, rows, width):
         return _plain(row[c]) if c < len(row) else ""
     need = [max(min(len(cell(row, c)), 60) for row in rows) + 1 for c in range(ncol)]
     word = [max((len(w) for row in rows for w in cell(row, c).split()), default=1) + 1 for c in range(ncol)]
-    room = max(width - 40 - 18 * ncol, 60 * ncol)
+    room = max(width - md["indent"] - 40 - 18 * ncol, 60 * ncol)
     px = 8  # ~ average character width at 9 pt (bold)
     if sum(need) * px <= room:
         widths = [0] * ncol  # everything fits on one line: no wrapping
@@ -86,9 +97,10 @@ def _table(text, rows, width):
                            font=(md["font"], 9, "bold" if bold else "normal"))
             lab.grid(row=r, column=c, sticky="nsew", padx=(0, 1), pady=(0, 1))
             lab.bind("<Button-3>", lambda e, rows=rows: _table_menu(text, e, rows))
-    text.insert("end", "\n", ("p",))
-    text.window_create("end", window=outer, padx=4, pady=4)
-    text.insert("end", "\n", ("p",))
+    idx = text.index("end-1c")
+    text.window_create(idx, window=outer)
+    text.tag_add("tbl", idx)
+    text.insert("end", "\n", ("tbl",))
 
 
 def _table_menu(text, event, rows):
@@ -97,6 +109,26 @@ def _table_menu(text, event, rows):
     menu.add_command(label="Copy table (paste into Excel)",
                      command=lambda: (text.clipboard_clear(), text.clipboard_append(tsv)))
     menu.tk_popup(event.x_root, event.y_root)
+
+
+def plain(md_text):
+    """The answer as clean text for the clipboard: tables tab-separated (they paste as Excel
+    columns), bullets as •, no Markdown marks."""
+    out = []
+    for line in md_text.strip().splitlines():
+        s = line.rstrip()
+        if s.lstrip().startswith("|"):
+            if not TABLE_SEP.match(s):
+                out.append("\t".join(_plain(c) for c in _cells(s)))
+            continue
+        if re.fullmatch(r"\s*(-{3,}|\*{3,}|_{3,})\s*", s):
+            continue
+        m = HEADING.match(s.strip())
+        if m:
+            s = m.group(2)
+        s = BULLET.sub(lambda m: m.group(1) + "• " + m.group(2), s)
+        out.append(_plain(s))
+    return "\n".join(out)
 
 
 def render(text, md_text, width=900):
@@ -128,22 +160,21 @@ def render(text, md_text, width=900):
             level = min(len(m.group(1)), 3)
             text.insert("end", _plain(m.group(2)) + "\n", (f"h{level}",))
         elif re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", s):
-            text.insert("end", "\n", ("p",))
-            text.window_create("end", window=tk.Frame(text, background=text.md["line"], height=1,
-                                                      width=max(200, width - 60)))
-            text.insert("end", "\n", ("p",))
+            pass  # horizontal rules: the layout has enough structure without them
         elif BULLET.match(line):
             m = BULLET.match(line)
             level = min(len(m.group(1).replace("\t", "  ")) // 2, 3)
-            text.insert("end", ("•", "◦", "▪", "▪")[level] + "  ", (f"li{level}",))
+            text.insert("end", ("•", "◦", "▪", "▪")[level] + "  ", (f"li{level}", "mark"))
             _inline(text, m.group(2), (f"li{level}",))
             text.insert("end", "\n", (f"li{level}",))
         elif NUMBERED.match(line):
             m = NUMBERED.match(line)
             level = min(len(m.group(1).replace("\t", "  ")) // 2, 3)
-            text.insert("end", f"{m.group(2)}.  ", (f"li{level}", "b"))
+            text.insert("end", f"{m.group(2)}.  ", (f"li{level}", "mark"))
             _inline(text, m.group(3), (f"li{level}",))
             text.insert("end", "\n", (f"li{level}",))
+        elif re.match(r"^sources?\s*:", s, re.I):
+            text.insert("end", _plain(s) + "\n", ("source",))
         elif s.startswith(">"):
             _inline(text, s.lstrip("> "), ("quote",))
             text.insert("end", "\n", ("quote",))

@@ -4,17 +4,25 @@ Claude reads orders through two tools that run on the app's GOLD session (read-o
   get_order_overview(order)    key facts: dates, status, value, site, people, latest note
   read_order_tab(order, tab)   everything on one tab (Pricing, Milestones, Notes, Billing...)
 
-The API key is never part of the app: it is read at run time from the team's key file
-(salto-buddy-team.key, synced from the team's SharePoint/OneDrive folder).
+The API key is never part of the app (the installer is public): it is read at run time from the
+team's key file (salto-buddy-team.key) in the team's SharePoint folder - downloaded automatically
+with the user's Windows / Orange sign-in, which only team members can open - and kept on this PC
+encrypted for this Windows user (DPAPI).
 """
+import ctypes
+import ctypes.wintypes
 import json
 import re
 import time
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 MODEL = "claude-opus-5-5"
 KEY_FILE_NAME = "salto-buddy-team.key"
+# The team folder that holds the key file (opens only for Orange accounts it is shared with).
+SHARE_URL = ("https://orange0-my.sharepoint.com/:f:/g/personal/ahmed_elbourgy_ext_orange_com/"
+             "IgBIet85KpwDSoTaxyAIlhvqAU5wFrH1Muf4zmBEifupeuw?e=7cyXjl")
 CACHE_MIN = 5          # re-use what was read from GOLD for this many minutes
 MAX_TOOL_TEXT = 60000  # characters of one tab sent to Claude
 MAX_STEPS = 12         # tool rounds per question
@@ -22,13 +30,28 @@ MAX_STEPS = 12         # tool rounds per question
 
 # ---------------------------------------------------------------- key file
 
+def _sync_roots():
+    """Folders OneDrive syncs on this PC (personal OneDrive with SharePoint shortcuts, synced libraries)."""
+    import os
+    roots = []
+    try:
+        import winreg
+        base = r"Software\SyncEngines\Providers\OneDrive"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base) as k:
+            for i in range(winreg.QueryInfoKey(k)[0]):
+                with winreg.OpenKey(k, winreg.EnumKey(k, i)) as sub:
+                    roots.append(winreg.QueryValueEx(sub, "MountPoint")[0])
+    except OSError:
+        pass
+    roots += [os.environ.get("OneDriveCommercial", "")] + [str(p) for p in Path.home().glob("OneDrive*")]
+    return [Path(r) for r in dict.fromkeys(roots) if r and Path(r).is_dir()]
+
+
 def find_key_file(saved=""):
-    """The key file: the one chosen in Settings, else the synced team folder under OneDrive."""
+    """The key file on disk: the one chosen in Settings, else the team folder synced by OneDrive."""
     if saved and Path(saved).is_file():
         return Path(saved)
-    home = Path.home()
-    roots = [p for p in home.glob("OneDrive*") if p.is_dir()]
-    for root in roots:
+    for root in _sync_roots():
         for pattern in (f"SALTO Buddy/{KEY_FILE_NAME}", KEY_FILE_NAME, f"*/{KEY_FILE_NAME}",
                         f"*/*/{KEY_FILE_NAME}"):
             for p in root.glob(pattern):
@@ -37,21 +60,147 @@ def find_key_file(saved=""):
     return None
 
 
+def _first_key(text):
+    key = next((line.strip() for line in (text or "").splitlines() if line.strip()), "")
+    return key if key.startswith("sk-ant-") else ""
+
+
 def load_key(path):
-    """The API key from the key file (first non-empty line), or a clear error."""
-    if not path:
-        raise RuntimeError(
-            f"The AI key file ({KEY_FILE_NAME}) was not found.\n\nSync the team's 'SALTO Buddy' "
-            "SharePoint folder to OneDrive (open it in the browser > 'Add shortcut to My files' or "
-            "'Sync'), or choose the file in Settings > AI assistant.")
+    """The API key from a key file on disk, or a clear error."""
     try:
         text = Path(path).read_text(encoding="utf-8-sig")
     except OSError as e:
-        raise RuntimeError(f"Could not read the AI key file {path}:\n{e}\n\nIf it is a OneDrive "
-                           "file, right-click it > 'Always keep on this device'.") from None
-    key = next((line.strip() for line in text.splitlines() if line.strip()), "")
-    if not key.startswith("sk-ant-"):
+        raise RuntimeError(f"Could not read the AI key file {path}:\n{e}") from None
+    key = _first_key(text)
+    if not key:
         raise RuntimeError(f"{path} does not contain an Anthropic API key.")
+    return key
+
+
+# --- the key kept on this PC, encrypted for this Windows user (DPAPI)
+
+class _Blob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+def _dpapi(data, protect):
+    crypt32, kernel32 = ctypes.windll.crypt32, ctypes.windll.kernel32
+    src = ctypes.create_string_buffer(data, len(data))
+    blob_in, blob_out = _Blob(len(data), src), _Blob()
+    fn = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+    if not fn(ctypes.byref(blob_in), None, None, None, None, 0x1, ctypes.byref(blob_out)):  # UI_FORBIDDEN
+        raise OSError("DPAPI failed")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        kernel32.LocalFree(blob_out.pbData)
+
+
+def cached_key(cache_file):
+    try:
+        return _first_key(_dpapi(Path(cache_file).read_bytes(), protect=False).decode("utf-8"))
+    except Exception:
+        return ""
+
+
+def save_cached_key(cache_file, key):
+    try:
+        Path(cache_file).write_bytes(_dpapi(key.encode("utf-8"), protect=True))
+    except Exception:
+        pass
+
+
+def forget_cached_key(cache_file):
+    try:
+        Path(cache_file).unlink()
+    except OSError:
+        pass
+
+
+# --- download from the team SharePoint folder with the browser's Windows / Orange sign-in
+
+FETCH_KEY_JS = """
+const [folder, name, done] = arguments;
+const path = folder + '/' + name;
+const site = location.origin + folder.split('/').slice(0, 3).join('/');
+const urls = [
+  site + "/_api/web/GetFileByServerRelativePath(decodedurl=@a)/$value?@a=" +
+      encodeURIComponent("'" + path.replace(/'/g, "''") + "'"),
+  site + "/_layouts/15/download.aspx?SourceUrl=" + encodeURIComponent(path),
+  location.origin + encodeURI(path),
+];
+(async () => {
+  const tried = [];
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, {credentials: 'include'});
+      const t = r.ok ? (await r.text()).trim() : '';
+      if (t.startsWith('sk-ant-')) { done({key: t}); return; }
+      tried.push(r.status);
+    } catch (e) { tried.push('error'); }
+  }
+  done({tried: tried});
+})();
+"""
+
+
+def fetch_key_from_sharepoint(driver, timeout=45):
+    """Open the team folder in a new tab of the app's (hidden) Firefox - it signs in to Microsoft 365
+    with the Windows account - read the key file, close the tab. Returns the key or raises."""
+    from open_gold import page_text
+    home = driver.current_window_handle
+    driver.switch_to.new_window("tab")
+    try:
+        driver.get(SHARE_URL)
+        folder, deadline = "", time.time() + timeout
+        while time.time() < deadline:
+            url = driver.current_url
+            folder = parse_qs(urlparse(url).query).get("id", [""])[0]
+            if folder and KEY_FILE_NAME in page_text(driver):
+                break
+            time.sleep(0.5)
+        host = urlparse(driver.current_url).netloc
+        if not folder:
+            if "login" in host or "microsoftonline" in host:
+                raise RuntimeError("could not sign in to SharePoint automatically")
+            raise RuntimeError("the team folder did not open (no access?)")
+        driver.set_script_timeout(30)
+        result = driver.execute_async_script(FETCH_KEY_JS, folder, KEY_FILE_NAME) or {}
+        key = _first_key(result.get("key", ""))
+        if not key:
+            raise RuntimeError(f"the key file could not be read (HTTP {result.get('tried')})")
+        return key
+    finally:
+        try:
+            driver.close()
+        finally:
+            driver.switch_to.window(home)
+
+
+def get_key(chosen_file, cache_file, driver_fn, log=print):
+    """The API key, from (1) the file chosen in Settings, (2) this PC's encrypted copy,
+    (3) the synced team folder, (4) the team SharePoint folder (downloaded automatically)."""
+    if chosen_file and Path(chosen_file).is_file():
+        return load_key(chosen_file)
+    key = cached_key(cache_file)
+    if key:
+        return key
+    local = find_key_file()
+    if local:
+        try:
+            key = load_key(local)
+        except RuntimeError:
+            key = ""
+    if not key:
+        log("Ask GOLD: getting the AI key from the team SharePoint folder...")
+        try:
+            key = fetch_key_from_sharepoint(driver_fn())
+        except Exception as e:
+            reason = str(e).splitlines()[0] if str(e) else type(e).__name__
+            raise RuntimeError(
+                f"Ask GOLD could not get the team's AI key from SharePoint ({reason}).\n\nCheck that "
+                f"you can open the team 'SALTO Buddy' folder in your browser, then ask again.") from None
+    save_cached_key(cache_file, key)
     return key
 
 
@@ -218,16 +367,27 @@ that and point to the right GOLD Express tab (Revised Target Date, Bulk Order As
 - Start with get_order_overview; use read_order_tab for details (e.g. Pricing lines, every milestone, full \
 notes, site address). When the user does not repeat the order number, use the order(s) from earlier in \
 the conversation. If no order number is known, ask for it.
+- The order open in GOLD Express's Order explorer is given with each question: questions that name no \
+order ("what are the deadlines?", "who is the STM?") are about that order.
 - Several orders: read each one, then compare.
 - Dates as dd-Mon-yyyy (e.g. 06-Dec-2026). Amounts with their currency. Say how many days are left \
 (or how late) for deadlines when useful.
+- Answer in the user's language.
 
-How to format answers (they are shown in a chat window that renders markdown):
-- Lead with the direct answer in one short sentence.
-- Use a markdown table (| a | b | with a header separator row) for anything with several items or \
-columns: milestones, price lines, team members, documents, several orders side by side.
-- Use bullet lists for short sets of facts, ## headings only when the answer has several parts, \
-**bold** for the key value. No emoji. Keep it concise: no preamble, no closing offers."""
+How to lay out the answer (shown as a small Markdown subset; people paste these answers into emails and \
+reports, so they must be clean and easy to scan):
+- First line: the direct answer in one sentence, with the key value(s) in **bold**. No preamble ("Sure", \
+"Let me check", "Based on the data"), no closing offers or questions unless something is truly ambiguous.
+- Then only the details that help. Use "### " headings only when the answer has two or more distinct \
+groups; keep headings to 1-3 words.
+- A few facts about one thing: one bullet each, written "- **Label:** value".
+- Several items that share 3 or more fields (milestones, price lines, team members, documents, orders side \
+by side): a Markdown table with a header row and one row per item, ordered sensibly. List every item, never \
+"...". At most 7 columns.
+- Missing values: write "not found" in the cell, never leave it blank or guess. If something needs the \
+user's attention (a passed deadline, a missing owner), say so in one bullet after the table.
+- Last line, on its own: "Source: GOLD order <number>, <tab(s) read>".
+- Use nothing else: no italics, links, code blocks, emojis, nested lists or horizontal rules. Be concise."""
 
 
 class Chat:
@@ -236,23 +396,28 @@ class Chat:
     def __init__(self, key, reader):
         import anthropic
         self.anthropic = anthropic
-        self.client = anthropic.Anthropic(api_key=key, max_retries=3)
+        self.client = anthropic.Anthropic(api_key=key, max_retries=3, timeout=180)
         self.reader = reader
         self.messages = []
 
-    def ask(self, question, progress=lambda text: None):
-        """Send the user's question; run the tools Claude asks for; return the answer (markdown)."""
-        self.messages.append({"role": "user", "content": question})
+    def ask(self, question, progress=lambda text: None, context=""):
+        """Send the user's question; run the tools Claude asks for; return the answer (markdown).
+        context is added to this question only, e.g. which order is open in the Order explorer."""
+        self.messages.append({"role": "user",
+                              "content": f"[{context}]\n\n{question}" if context else question})
         try:
             for _ in range(MAX_STEPS):
-                with self.client.messages.stream(
+                with self.client.beta.messages.stream(
                         model=MODEL,
                         max_tokens=16000,
                         system=system_prompt(),
-                        tools=TOOLS,
+                        # strict: Claude's arguments always match the schemas exactly
+                        tools=[{**t, "strict": True} for t in TOOLS],
                         messages=self.messages,
                         output_config={"effort": "medium"},
                         cache_control={"type": "ephemeral"},
+                        betas=["server-side-fallback-2026-07-01"],  # if a safety check declines, another model answers
+                        fallbacks="default",
                 ) as stream:
                     response = stream.get_final_message()
                 self.messages.append({"role": "assistant", "content": response.content})
@@ -262,7 +427,7 @@ class Chat:
                 if response.stop_reason != "tool_use" or not calls:
                     text = "\n".join(b.text for b in response.content if b.type == "text").strip()
                     if response.stop_reason == "max_tokens":
-                        text += "\n\n*(The answer was cut short - ask for a shorter or narrower answer.)*"
+                        text += "\n\n(The answer was cut short - ask for a shorter or narrower answer.)"
                     return text or "(no answer)"
                 results = []
                 for call in calls:

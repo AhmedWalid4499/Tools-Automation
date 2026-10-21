@@ -99,6 +99,9 @@ def start_firefox(headless=False, profile_dir=None):
     opts.set_preference("browser.download.always_ask_before_handling_new_types", False)
     opts.set_preference("browser.download.alwaysOpenPanel", False)
     opts.set_preference("pdfjs.disabled", True)
+    # Sign in to Microsoft 365 (SharePoint) with the Windows account, like Edge does: lets Ask GOLD
+    # fetch the team's AI key file without any setup.
+    opts.set_preference("network.http.windows-sso.enabled", True)
     opts.set_preference(
         "browser.helperApps.neverAsk.saveToDisk",
         "application/pdf,application/octet-stream,application/vnd.ms-excel,"

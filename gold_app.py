@@ -37,6 +37,7 @@ from open_gold import HELPER_PROFILES_DIR, Wait, APP_NAME, BUNDLE_DIR, GOLD_URL,
 from version import AUTHOR, __version__
 
 SETTINGS_FILE = HERE / "gold_app_settings.json"
+AI_KEY_CACHE = HERE / "ai_key.bin"  # the team's AI key, encrypted for this Windows user
 
 # Palette (Orange-style: black header, orange accent, light grey canvas)
 ORANGE = "#FF7900"
@@ -746,7 +747,7 @@ class App(tk.Tk):
 
         ttk.Label(body, text="AI assistant (Ask GOLD)", style="CardHead.TLabel").grid(
             row=10, column=0, sticky="w", columnspan=4, pady=(16, 2))
-        ttk.Label(body, text="Key file", style="Card.TLabel").grid(row=11, column=0, sticky="w", pady=4)
+        ttk.Label(body, text="Key file (optional)", style="Card.TLabel").grid(row=11, column=0, sticky="w", pady=4)
         ttk.Entry(body, textvariable=self.ai_key_file, width=62).grid(row=11, column=1, sticky="ew", padx=8)
         key_state = ttk.Label(body, style="CardMuted.TLabel", font=(FONT, 8))
         key_state.grid(row=12, column=1, columnspan=3, sticky="w", padx=8)
@@ -754,10 +755,11 @@ class App(tk.Tk):
         def show_key_state(*_):
             if not key_state.winfo_exists():
                 return
-            found = gai.find_key_file(self.ai_key_file.get().strip())
-            key_state.configure(text=f"Using {found}" if found else
-                                f"Not found - leave empty to find {gai.KEY_FILE_NAME} in your synced "
-                                "OneDrive folders, or choose the file")
+            chosen = self.ai_key_file.get().strip()
+            key_state.configure(
+                text="Leave empty: the team's AI key is fetched automatically from the team SharePoint "
+                     "folder (nothing to set up)" if not chosen else
+                f"Using {chosen}" if Path(chosen).is_file() else "File not found")
         ttk.Button(body, text="Browse...", command=lambda: (self._browse_key(), show_key_state())).grid(
             row=11, column=2)
         key_trace = self.ai_key_file.trace_add("write", show_key_state)
@@ -1599,56 +1601,133 @@ class App(tk.Tk):
         w.submit(f"Checking {len(entries)} name(s) in GOLD", job, done)
 
     # ----- Ask GOLD tab (AI assistant)
-    ASK_EXAMPLES = ("What are the deadlines of 10-1234567?",
-                    "Show the pricing details of 10-1234567",
-                    "What is the site address and who is the STM for 10-1234567?",
-                    "Compare the delivery status of 10-1234567 and 10-7654321")
+    CHAT_BG = "#F7F8FA"
+    ASK_INDENT = 40  # answers line up under the assistant's name, right of its avatar
+    # (title, description, question) - "{order}" is the order open in the Order explorer
+    ASK_SUGGESTIONS = (("Deadlines", "Target dates, milestones, lead time",
+                        "What are the deadlines and milestones of {order}?"),
+                       ("Pricing", "Monthly and one-off charges, order value",
+                        "Show the pricing details of {order}."),
+                       ("Site", "Address, site ID and references",
+                        "What is the site address of {order}?"),
+                       ("People", "STM, owners, technical support",
+                        "Who is working on {order}?"))
 
     def _build_ask_tab(self, f):
-        top = tk.Frame(f, background=CARD)
-        top.pack(fill="x")
-        ttk.Label(top, text="Ask anything about your GOLD orders - deadlines, pricing, site address, "
-                            "people, notes. The assistant reads GOLD for you (it never changes anything).",
-                  style="Muted.TLabel", wraplength=860, justify="left").pack(side="left", anchor="w")
-        self._btn(top, "New chat", self._ask_new).pack(side="right")
-        self._btn(top, "Copy answer", self._ask_copy).pack(side="right", padx=6)
+        f.configure(padx=0, pady=0)
+        # Header: title + what it does | order in context, New chat
+        head = tk.Frame(f, background=CARD, padx=20, pady=12)
+        head.pack(fill="x")
+        tk.Label(head, text="✦", bg=ORANGE, fg="white", font=(FONT, 12, "bold"), width=2).pack(side="left")
+        titles = tk.Frame(head, background=CARD)
+        titles.pack(side="left", padx=(10, 0))
+        tk.Label(titles, text="Ask GOLD", bg=CARD, fg=INK, font=(FONT, 13, "bold")).pack(anchor="w")
+        tk.Label(titles, text="AI assistant · reads GOLD live for you, never changes anything", bg=CARD,
+                 fg=MUTED, font=(FONT, 9)).pack(anchor="w")
+        self._btn(head, "＋  New chat", self._ask_new).pack(side="right")
+        self.ask_chip = tk.Label(head, bg=ORANGE_SOFT, fg=ORANGE_DARK, font=(FONT, 9, "bold"), padx=10, pady=4)
+        tk.Frame(f, background=LINE, height=1).pack(fill="x")
 
-        box = tk.Frame(f, background=CARD, highlightthickness=1, highlightbackground=LINE)
-        box.pack(fill="both", expand=True, pady=(10, 8))
-        self.ask_text = tk.Text(box, wrap="word", relief="flat", background=CARD, foreground=INK,
-                                padx=16, pady=12, cursor="arrow", state="disabled", font=(FONT, 10))
-        sb = ttk.Scrollbar(box, orient="vertical", command=self.ask_text.yview)
+        # Composer (bottom)
+        foot = tk.Frame(f, background=CARD, padx=20, pady=12)
+        foot.pack(side="bottom", fill="x")
+        tk.Frame(f, background=LINE, height=1).pack(side="bottom", fill="x")
+        box = tk.Frame(foot, background=CARD, highlightthickness=1, highlightbackground="#CFD3D9",
+                       highlightcolor=ORANGE)
+        box.pack(fill="x")
+        self.ask_input = tk.Text(box, height=2, wrap="word", font=(FONT, 11), relief="flat", padx=12, pady=10,
+                                 background=CARD, foreground=INK, insertbackground=INK, highlightthickness=0,
+                                 borderwidth=0)
+        self.ask_input.pack(side="left", fill="both", expand=True)
+        self.ask_send = tk.Label(box, text="➤", bg=ORANGE, fg="white", font=(FONT, 13, "bold"), width=3,
+                                 cursor="hand2")
+        self.ask_send.pack(side="right", fill="y", padx=6, pady=6)
+        self.ask_send.bind("<Button-1>", lambda e: self._ask_send())
+        self.ask_placeholder = tk.Label(box, bg=CARD, fg="#9CA3AF", font=(FONT, 11), cursor="xterm")
+        self.ask_placeholder.place(x=14, y=10)
+        self.ask_placeholder.bind("<Button-1>", lambda e: self.ask_input.focus_set())
+        self.ask_input.bind("<Return>", lambda e: (self._ask_send(), "break")[1])
+        self.ask_input.bind("<Shift-Return>", lambda e: None)
+        self.ask_input.bind("<KeyRelease>", lambda e: self._ask_input_changed())
+        self.ask_input.bind("<FocusIn>", lambda e: box.configure(highlightbackground=ORANGE))
+        self.ask_input.bind("<FocusOut>", lambda e: box.configure(highlightbackground="#CFD3D9"))
+        hints = tk.Frame(foot, background=CARD)
+        hints.pack(fill="x", pady=(6, 0))
+        self.ask_status = tk.Label(hints, text="", bg=CARD, fg=MUTED, font=(FONT, 8))
+        self.ask_status.pack(side="left")
+        tk.Label(hints, text="Enter to send  ·  Shift+Enter for a new line  ·  right-click a table to copy it",
+                 bg=CARD, fg="#9CA3AF", font=(FONT, 8)).pack(side="right")
+
+        # Conversation
+        body = tk.Frame(f, background=self.CHAT_BG)
+        body.pack(fill="both", expand=True)
+        self.ask_text = tk.Text(body, wrap="word", relief="flat", background=self.CHAT_BG, foreground=INK,
+                                padx=28, pady=18, cursor="arrow", state="disabled", font=(FONT, 10),
+                                highlightthickness=0, borderwidth=0, selectbackground=ORANGE_SOFT,
+                                selectforeground=INK, inactiveselectbackground=ORANGE_SOFT)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.ask_text.yview)
         self.ask_text.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self.ask_text.pack(side="left", fill="both", expand=True)
-        gmd.setup(self.ask_text, font=FONT, ink=INK, muted=MUTED, accent=ORANGE, soft=ORANGE_SOFT, line=LINE)
-        self.ask_text.tag_configure("you", font=(FONT, 10, "bold"), foreground=INK, background="#F3F4F6",
-                                    lmargin1=4, lmargin2=4, rmargin=4, spacing1=14, spacing3=8)
-        self.ask_text.tag_configure("who", font=(FONT, 8, "bold"), foreground=ORANGE, spacing1=10)
-        self.ask_text.tag_configure("err", foreground=RED, font=(FONT, 10))
-        self.ask_text.tag_configure("hint", foreground=MUTED, font=(FONT, 10))
-        self.ask_text.tag_configure("example", foreground=ORANGE, font=(FONT, 10, "underline"),
-                                    lmargin1=16, spacing1=3)
-        self.ask_text.tag_bind("example", "<Enter>", lambda e: self.ask_text.configure(cursor="hand2"))
-        self.ask_text.tag_bind("example", "<Leave>", lambda e: self.ask_text.configure(cursor="arrow"))
-        # Mouse wheel over embedded tables scrolls the chat
-        self.ask_text.bind_all("<MouseWheel>", self._ask_wheel, add="+")
-
-        bar = tk.Frame(f, background=CARD)
-        bar.pack(fill="x")
-        self.ask_input = tk.Text(bar, height=3, wrap="word", font=(FONT, 11), relief="flat", padx=10, pady=8,
-                                 background="#FAFAFA", foreground=INK, highlightthickness=1,
-                                 highlightbackground=LINE, highlightcolor=ORANGE, insertbackground=INK)
-        self.ask_input.pack(side="left", fill="x", expand=True)
-        self.ask_input.bind("<Return>", lambda e: (self._ask_send(), "break")[1])
-        self.ask_input.bind("<Shift-Return>", lambda e: None)
-        self.ask_send_btn = self._btn(bar, "Ask  ➤", self._ask_send, "Accent.TButton")
-        self.ask_send_btn.pack(side="left", padx=(10, 0), fill="y")
-        self.ask_status = ttk.Label(f, text="Enter to send · Shift+Enter for a new line", style="Muted.TLabel",
-                                    font=(FONT, 8))
-        self.ask_status.pack(anchor="w", pady=(4, 0))
-        self.ask_last = ""  # last answer (markdown) for Copy
+        t = self.ask_text
+        gmd.setup(t, font=FONT, ink=INK, muted=MUTED, accent=ORANGE, soft=ORANGE_SOFT, line=LINE,
+                  indent=self.ASK_INDENT)
+        t.tag_configure("right", justify="right", spacing1=14, spacing3=2, rmargin=4)
+        t.tag_configure("meta", font=(FONT, 8), foreground="#9CA3AF")
+        t.tag_configure("who", font=(FONT, 10, "bold"), foreground=INK, spacing1=16, spacing3=4)
+        t.tag_raise("meta")
+        t.tag_configure("center", justify="center")
+        t.tag_configure("hero", font=(FONT, 16, "bold"), foreground=INK, justify="center", spacing1=6)
+        t.tag_configure("sub", font=(FONT, 10), foreground=MUTED, justify="center", spacing1=4, spacing3=16)
+        t.tag_configure("err", foreground=RED, font=(FONT, 10), lmargin1=self.ASK_INDENT + 2,
+                        lmargin2=self.ASK_INDENT + 2, spacing1=2, spacing3=6)
+        t.tag_configure("action", font=(FONT, 8, "bold"), foreground=MUTED, lmargin1=self.ASK_INDENT + 2,
+                        spacing1=4, spacing3=6)
+        # Mouse wheel over embedded tables / bubbles scrolls the chat
+        t.bind_all("<MouseWheel>", self._ask_wheel, add="+")
+        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._ask_tab_shown(), add="+")
+        self.ask_order = ""     # order the welcome screen / chip was drawn for
+        self.ask_pending = None  # "thinking" row while a question runs
         self._ask_welcome()
+
+    # --- helpers
+    def _ask_context_order(self):
+        """The order the user is looking at: open in the Order explorer, else typed there."""
+        if self.order:
+            return self.order
+        typed = self.order_var.get().strip()
+        return typed if re.fullmatch(r"\d{2}-\d{5,8}", typed) else ""
+
+    def _ask_tab_shown(self):
+        try:
+            on_ask = self.notebook.index("current") == self.notebook.index("end") - 1
+        except tk.TclError:
+            return
+        if not on_ask:
+            return
+        order = self._ask_context_order()
+        if order != self.ask_order and not (self.chat and self.chat.messages) and not self.busy:
+            self._ask_welcome()
+        self._ask_refresh_chip()
+        self.ask_input.focus_set()
+
+    def _ask_refresh_chip(self):
+        order = self._ask_context_order()
+        if order:
+            self.ask_chip.configure(text=f"Order in view:  {order}")
+            self.ask_chip.pack(side="right", padx=(0, 12))
+        else:
+            self.ask_chip.pack_forget()
+        self._ask_input_changed()
+
+    def _ask_input_changed(self):
+        if self.ask_input.get("1.0", "end").strip():
+            self.ask_placeholder.place_forget()
+        else:
+            order = self._ask_context_order()
+            self.ask_placeholder.configure(text=f"Ask about {order} or any other order..." if order
+                                           else "Ask about a GOLD order, e.g. deadlines of 10-1234567")
+            self.ask_placeholder.place(x=14, y=10)
 
     def _ask_wheel(self, e):
         w = e.widget
@@ -1664,76 +1743,195 @@ class App(tk.Tk):
         t.configure(state="disabled")
         t.see("end")
 
-    def _ask_welcome(self):
-        def write(t):
-            t.insert("end", "Hi! Ask me about any GOLD order. For example (click one, then put in "
-                            "your order number):\n", ("hint",))
-            for i, q in enumerate(self.ASK_EXAMPLES):
-                tag = f"ex{i}"
-                t.insert("end", q + "\n", ("example", tag))
-                t.tag_bind(tag, "<Button-1>", lambda e, q=q: self._ask_example(q))
-        self._ask_write(write)
+    def _ask_clear(self):
+        def clear(t):
+            t.delete("1.0", "end")
+            for w in t.winfo_children():
+                w.destroy()
+        self._ask_write(clear)
 
-    def _ask_example(self, q):
+    def _ask_avatar(self, t):
+        t.window_create("end", window=tk.Label(t, text="GX", bg=ORANGE, fg="white", font=(FONT, 8, "bold"),
+                                               width=3, pady=2), padx=0)
+        t.insert("end", "   ", ("who",))
+
+    # --- welcome screen with suggestions
+    def _ask_welcome(self):
+        self._ask_clear()
+        order = self.ask_order = self._ask_context_order()
+
+        def write(t):
+            t.insert("end", "\n\n", ("center",))
+            t.window_create("end", window=tk.Label(t, text="✦", bg=ORANGE, fg="white", font=(FONT, 18, "bold"),
+                                                   width=2))
+            t.tag_add("center", "end-2c")
+            t.insert("end", "\nHow can I help with your orders?\n", ("hero",))
+            t.insert("end", (f"Ask about order {order} (open in the Order explorer) or any other order."
+                             if order else "Ask about any GOLD order - type its number in your question.")
+                     + "\n", ("sub",))
+            grid = tk.Frame(t, background=self.CHAT_BG)
+            for i, (title, desc, q) in enumerate(self.ASK_SUGGESTIONS):
+                card = tk.Frame(grid, background=CARD, highlightthickness=1, highlightbackground=LINE,
+                                padx=14, pady=10, cursor="hand2")
+                card.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
+                a = tk.Label(card, text=title, bg=CARD, fg=INK, font=(FONT, 10, "bold"), anchor="w", width=30,
+                             cursor="hand2")
+                b = tk.Label(card, text=desc, bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w", cursor="hand2")
+                a.pack(fill="x")
+                b.pack(fill="x")
+                question = q.format(order=order or "10-1234567")
+                for w in (card, a, b):
+                    w.bind("<Button-1>", lambda e, q=question: self._ask_suggestion(q))
+                    w.bind("<Enter>", lambda e, c=card: c.configure(highlightbackground=ORANGE))
+                    w.bind("<Leave>", lambda e, c=card: c.configure(highlightbackground=LINE))
+            t.window_create("end", window=grid)
+            t.tag_add("center", "end-2c")
+            t.insert("end", "\n", ("center",))
+        self._ask_write(write)
+        self.ask_text.see("1.0")
+        self._ask_refresh_chip()
+
+    def _ask_suggestion(self, q):
         self.ask_input.delete("1.0", "end")
         self.ask_input.insert("1.0", q)
-        self.ask_input.focus_set()
+        if self._ask_context_order():
+            self._ask_send()
+        else:  # no order in view: let the user put in the order number
+            self.ask_input.tag_add("sel", "1.0", "end-1c")
+            self.ask_input.focus_set()
+            self._ask_input_changed()
 
     def _ask_new(self):
         if self.busy:
             return
         if self.chat:
             self.chat.messages.clear()
-        self.ask_last = ""
-        self._ask_write(lambda t: t.delete("1.0", "end"))
-        for w in self.ask_text.winfo_children():
-            w.destroy()
         self._ask_welcome()
 
-    def _ask_copy(self):
-        if self.ask_last:
-            self.clipboard_clear()
-            self.clipboard_append(self.ask_last)
-            self.log("Answer copied.")
+    # --- messages
+    def _ask_user_message(self, question):
+        def write(t):
+            stamp = datetime.now().strftime("%H:%M")
+            t.mark_set("question", "end-1c")
+            t.mark_gravity("question", "left")
+            t.insert("end", f"You · {stamp}\n", ("right", "meta"))
+            width = max(300, int(t.winfo_width() * 0.62))
+            bubble = tk.Label(t, text=question, bg=ORANGE, fg="white", font=(FONT, 10), justify="left",
+                              wraplength=width, padx=14, pady=9, anchor="w")
+            t.window_create("end", window=bubble)
+            t.tag_add("right", "end-2c")
+            t.insert("end", "\n", ("right",))
+        self._ask_write(write)
+
+    def _ask_thinking(self, text="Thinking..."):
+        """Show (or update) the assistant's 'working' row under the last question."""
+        if self.ask_pending is None:
+            def write(t):
+                t.mark_set("pending", "end-1c")
+                t.mark_gravity("pending", "left")
+                t.insert("end", "\n", ("who",))
+                self._ask_avatar(t)
+                lab = tk.Label(t, bg=self.CHAT_BG, fg=MUTED, font=(FONT, 9, "italic"))
+                t.window_create("end", window=lab)
+                t.insert("end", "\n", ("who",))
+                self.ask_pending = lab
+            self._ask_write(write)
+            self._ask_pulse(0)
+        self.ask_pending.configure(text=text)
+        self.ask_pending.base = text
+
+    def _ask_pulse(self, n):
+        lab = self.ask_pending
+        if lab is None or not lab.winfo_exists():
+            return
+        base = getattr(lab, "base", "").rstrip(".")
+        lab.configure(text=base + "." * (n % 3 + 1))
+        self.after(450, self._ask_pulse, n + 1)
+
+    def _ask_end_thinking(self):
+        if self.ask_pending is not None:
+            self.ask_pending = None
+            self._ask_write(lambda t: t.delete("pending", "end-1c"))
+
+    def _ask_answer(self, answer, ok=True):
+        self._ask_end_thinking()
+
+        def write(t):
+            t.insert("end", "\n", ("who",))
+            self._ask_avatar(t)
+            t.insert("end", "Ask GOLD", ("who",))
+            t.insert("end", "   " + datetime.now().strftime("%H:%M") + "\n", ("who", "meta"))
+            if not ok:
+                t.insert("end", "⚠  " + answer + "\n", ("err",))
+                return
+            gmd.render(t, answer, max(500, t.winfo_width() - 60))
+            tag = f"copy{len(t.tag_names())}"
+            t.insert("end", "⧉  Copy answer", ("action", tag))
+            t.insert("end", "\n", ("action",))
+            text = gmd.plain(answer)
+            t.tag_bind(tag, "<Button-1>", lambda e: (self.clipboard_clear(), self.clipboard_append(text),
+                                                      self.log("Answer copied (tables paste into Excel as columns).")))
+            t.tag_bind(tag, "<Enter>", lambda e: (t.configure(cursor="hand2"), t.tag_configure(tag, foreground=ORANGE)))
+            t.tag_bind(tag, "<Leave>", lambda e: (t.configure(cursor="arrow"), t.tag_configure(tag, foreground=MUTED)))
+        self._ask_write(write)
+        # Long answers are read from the top: scroll so the question is at the top of the view.
+        self.ask_text.update_idletasks()
+        self.ask_text.yview("question")
 
     def _ask_send(self):
         question = self.ask_input.get("1.0", "end").strip()
         if not question or self.busy:
             return
-        if self.chat is None:
-            try:
-                key = gai.load_key(gai.find_key_file(self.ai_key_file.get().strip()))
-                self.chat = gai.Chat(key, gai.GoldReader(self))
-            except Exception as e:
-                self._ask_write(lambda t: t.insert("end", "\n" + str(e) + "\n", ("err",)))
-                return
         self.ask_input.delete("1.0", "end")
-        if not self.chat.messages:
-            self._ask_write(lambda t: (t.delete("1.0", "end"), [w.destroy() for w in t.winfo_children()]))
-        self._ask_write(lambda t: t.insert("end", question + "\n", ("you",)))
-        self.ask_status.configure(text="Thinking...")
-        chat = self.chat
+        self._ask_input_changed()
+        if not (self.chat and self.chat.messages):
+            self._ask_clear()
+        self._ask_user_message(question)
+        self._ask_thinking("Thinking")
+        self.ask_send.configure(bg="#F7C49A", cursor="watch")
+        chosen = self.ai_key_file.get().strip()
+        order = self._ask_context_order()
+        context = ""
+        if order:
+            banner = self.order_label.cget("text") if order == self.order else ""
+            context = (f"Order open in the Order explorer: {order}" + (f" ({banner})" if banner else "")
+                       + ". Questions that name no order are about it.")
 
         def progress(text):
-            self.ui(lambda: self.ask_status.configure(text=text))
+            self.ui(lambda: self._ask_thinking(text.rstrip(".")))
+
+        def driver():
+            self.worker.ensure_browser()
+            return self.worker.driver
+
+        def connect(fresh=False):
+            if fresh:  # the saved key was refused (e.g. replaced by a new one): fetch it again
+                gai.forget_cached_key(AI_KEY_CACHE)
+            key = gai.get_key(chosen, AI_KEY_CACHE, driver, self.log)
+            history = self.chat.messages if self.chat else []
+            self.chat = gai.Chat(key, gai.GoldReader(self))
+            self.chat.messages = history
 
         def job():
             try:
-                return True, chat.ask(question, progress)
+                if self.chat is None:
+                    progress("Connecting to the AI service")
+                    connect()
+                try:
+                    return True, self.chat.ask(question, progress, context)
+                except Exception as e:
+                    if not isinstance(e, self.chat.anthropic.AuthenticationError) or chosen:
+                        raise
+                    connect(fresh=True)
+                    return True, self.chat.ask(question, progress, context)
             except Exception as e:  # shown in the chat, not as a pop-up
                 (HERE / "gold_app_error.log").write_text(traceback.format_exc(), encoding="utf-8")
                 return False, gai.friendly_error(e)
 
         def done(result):
             ok, answer = result
-            self.ask_status.configure(text="Enter to send · Shift+Enter for a new line")
-            width = max(500, self.ask_text.winfo_width() - 40)
-            if ok:
-                self.ask_last = answer
-                self._ask_write(lambda t: (t.insert("end", "ASK GOLD\n", ("who",)),
-                                           gmd.render(t, answer, width)))
-            else:
-                self._ask_write(lambda t: t.insert("end", answer + "\n", ("err",)))
+            self.ask_send.configure(bg=ORANGE, cursor="hand2")
+            self._ask_answer(answer, ok)
             self.ask_input.focus_set()
 
         self.worker.submit("Asking GOLD", job, done)
@@ -2194,18 +2392,38 @@ def selftest(order):
         report.write_text("\n".join(lines), encoding="utf-8")
 
 
-def ask_selftest():
-    """GOLD Express.exe --ask-selftest : check the AI key file and the AI service (no GOLD)."""
+def ask_selftest(sharepoint=False):
+    """GOLD Express.exe --ask-selftest [--sharepoint] : check the AI key and the AI service (no GOLD).
+    --sharepoint does what a colleague's first question does: a brand-new hidden Firefox gets the key
+    from the team SharePoint folder (the synced folder and the saved key are not used)."""
+    import shutil
+    import tempfile
     lines = []
+    d = prof = None
     try:
-        path = gai.find_key_file(load_settings().get("ai_key_file", ""))
-        lines.append(f"Key file: {path}")
-        chat = gai.Chat(gai.load_key(path), reader=None)
+        if sharepoint:
+            prof = tempfile.mkdtemp(prefix="gx-ask-")
+            d = start_firefox(headless=True, profile_dir=prof)
+            key = gai.fetch_key_from_sharepoint(d)
+            lines.append("Key: fetched from the team SharePoint folder with a new Firefox profile")
+        else:
+            def driver():
+                nonlocal d
+                d = start_firefox(headless=True, profile_dir=tempfile.mkdtemp(prefix="gx-ask-"))
+                return d
+            key = gai.get_key(load_settings().get("ai_key_file", ""), AI_KEY_CACHE, driver, lines.append)
+            lines.append("Key: found")
+        chat = gai.Chat(key, reader=None)
         answer = chat.ask("This is a connection test. Reply with just: OK")
         lines.append(f"Answer: {answer}")
         lines.append("RESULT: OK")
     except Exception as e:
         lines.append(f"RESULT: FAILED - {gai.friendly_error(e)}\n" + traceback.format_exc())
+    finally:
+        if d is not None:
+            d.quit()
+        if prof:
+            shutil.rmtree(prof, ignore_errors=True)
     (HERE / "ask_selftest_report.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -2215,7 +2433,7 @@ if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         selftest(sys.argv[2])
     elif len(sys.argv) >= 2 and sys.argv[1] == "--ask-selftest":
-        ask_selftest()
+        ask_selftest(sharepoint="--sharepoint" in sys.argv)
     else:
         # One GOLD Express at a time: two copies can't share the Firefox profile.
         import ctypes
