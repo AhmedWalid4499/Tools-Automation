@@ -1,5 +1,10 @@
 # GOLD Express - what's new
 
+## 2.0.1
+- Fixed: on some company networks the update check said "You have the latest version" although a
+  newer one was published. It now tries three ways to read GitHub and says so when it cannot,
+  instead of reporting no update. The message also shows the newest version found.
+
 ## 2.0.0
 - **A fresh new look.** A neat side menu replaces the tabs, grouped into Orders (Overview, Order
   explorer, Ask GOLD), Bulk updates (Revised Target Date, Order assignment) and People (Org Chart,

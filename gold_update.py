@@ -37,7 +37,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _latest_tag(timeout):
+TAG_RE = re.compile(r"/releases/tag/([^/?#\"'<>\s]+)")
+
+
+def _redirect_tag(timeout):
     """'v1.5.0' from where github.com/<repo>/releases/latest redirects to. Unlike the GitHub API
     (60 requests per hour per IP - shared by a whole office), this page has no such limit."""
     opener = urllib.request.build_opener(_NoRedirect)
@@ -45,14 +48,43 @@ def _latest_tag(timeout):
     try:
         opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
-        location = e.headers.get("Location", "") if e.code in (301, 302, 303, 307, 308) else ""
-        m = re.search(r"/releases/tag/([^/?#]+)", location)
+        m = TAG_RE.search(e.headers.get("Location", "") or "")
         if m:
             return urllib.parse.unquote(m.group(1))
-        if e.code in (301, 302, 303, 307, 308):
-            return None  # redirected to the releases list: nothing published yet
-        raise
     return None
+
+
+def _followed_tag(timeout):
+    """Same page, letting the redirect happen (some company proxies follow redirects themselves)."""
+    req = urllib.request.Request(f"{RELEASES_PAGE}/latest", headers={"User-Agent": HEADERS["User-Agent"]})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        m = TAG_RE.search(r.geturl() or "")
+        return urllib.parse.unquote(m.group(1)) if m else None
+
+
+def _feed_tag(timeout):
+    """The newest release in github.com's releases feed."""
+    req = urllib.request.Request(f"{RELEASES_PAGE}.atom", headers={"User-Agent": HEADERS["User-Agent"]})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        feed = r.read().decode("utf-8", "replace")
+    tags = [urllib.parse.unquote(t) for t in TAG_RE.findall(feed)]
+    tags = [t for t in tags if re.match(r"v?\d+(\.\d+)*$", t)]
+    return max(tags, key=_vtuple) if tags else None
+
+
+def _latest_tag(timeout):
+    """The newest release tag, trying three ways. Raises when none works (e.g. a proxy answers instead
+    of GitHub) - never reports "no update" just because GitHub could not be read."""
+    problems = []
+    for way in (_redirect_tag, _followed_tag, _feed_tag):
+        try:
+            tag = way(timeout)
+            if tag:
+                return tag
+            problems.append(f"{way.__name__.strip('_')}: no version found")
+        except Exception as e:
+            problems.append(f"{way.__name__.strip('_')}: {str(e).splitlines()[0][:120] if str(e) else type(e).__name__}")
+    raise RuntimeError("GitHub could not be read from this network (" + "; ".join(problems) + ")")
 
 
 def _notes(tag, version, timeout):
@@ -82,8 +114,6 @@ def _notes(tag, version, timeout):
 def latest_release(timeout=15):
     """The newest published release: {version, notes, url, name, size, page} or None if none yet."""
     tag = _latest_tag(timeout)
-    if not tag:
-        return None
     version = tag.lstrip("vV")
     name = f"GOLD_Express_Setup_{version}.exe"
     return {"version": version, "notes": _notes(tag, version, timeout),

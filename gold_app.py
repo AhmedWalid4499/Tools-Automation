@@ -401,7 +401,8 @@ class App(tk.Tk):
                     self.ui(lambda: self._offer_update(rel))
             elif not quiet:
                 self.ui(lambda: messagebox.showinfo(
-                    APP_NAME, f"You have the latest version ({__version__})."))
+                    APP_NAME, f"You have the latest version ({__version__}).\n\n"
+                              f"Newest version on GitHub: {rel['version'] if rel else '?'}"))
         threading.Thread(target=work, daemon=True).start()
 
     def _offer_update(self, rel):
