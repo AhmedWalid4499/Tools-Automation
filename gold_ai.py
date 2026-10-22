@@ -211,6 +211,22 @@ TAB_HINT = ("Usual GOLD tabs: Information, Pricing, Milestones, Notes, Teams, Bi
 
 TOOLS = [
     {
+        "name": "my_orders",
+        "description": (
+            "INSTANT. The orders GOLD lists for the user (Orders > 'My orders only'), as already read by GOLD "
+            "Express: order number, customer, customer site ref, order status, service, target delivery date "
+            "(iTTD), order type, Orange site ref, site ID, BAN, sales country. Optional filter: an order number "
+            "or any text (customer, site ref, status). Use it first for questions about the user's own orders - "
+            "their status, customers, sites, target dates, which are late or due soon."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"filter": {"type": "string",
+                                      "description": "Order number or text to filter on; empty for all"}},
+            "required": ["filter"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "get_order_overview",
         "description": (
             "Key facts of one GOLD order in a single call: customer, project, scope, status, order type, "
@@ -219,8 +235,9 @@ TOOLS = [
             "milestone, revised-date history, order value (currency, new / existing / change in monthly "
             "charge, one-off charge, term, total value), site (country, city, address, site ID, Orange "
             "site ref, BAN), people (STM, delivery order owner, technical support, order entry, account "
-            "manager), external reference, previous order and the latest note. Start with this tool; use "
-            "read_order_tab when the question needs detail it does not have."),
+            "manager), external reference, previous order and the latest note. SLOW (it reads six GOLD tabs, "
+            "about 20-30 seconds): use it only for a summary of an order or when the question needs facts from "
+            "several tabs at once; for one kind of fact, read_order_tab with the right tab is much faster."),
         "input_schema": {
             "type": "object",
             "properties": {"order": {"type": "string", "description": "GOLD order number, e.g. 10-1771012"}},
@@ -310,6 +327,8 @@ class GoldReader:
         return text
 
     def run(self, name, args):
+        if name == "my_orders":
+            return self._my_orders(str(args.get("filter", "")).strip().lower())
         if name == "find_person":
             who = " ".join(str(args.get("person", "")).split())
             if not who:
@@ -324,6 +343,20 @@ class GoldReader:
             tab = str(args.get("tab", "")).strip() or "Information"
             return self._cached((order, tab.lower()), lambda: self._tab(order, tab))
         raise ValueError(f"Unknown tool {name}")
+
+    def _my_orders(self, q):
+        orders = getattr(self.app, "my_orders", None) or []
+        if not orders:
+            return ("My orders has not been read yet (open the My Orders page or wait for it to load). Use "
+                    "read_order_tab for a specific order instead.")
+        keep = ("order", "customer", "cust_site_ref", "status", "service", "ittd_date", "type", "orange_site_ref",
+                "site_id", "ban", "sales_country")
+        rows = [{k: o.get(k, "") for k in keep} for o in orders
+                if not q or q in " ".join(str(v) for v in o.values()).lower()]
+        when = getattr(self.app, "my_time", None)
+        head = (f"{len(rows)} of {len(orders)} orders in My orders"
+                + (f" (read {int((time.time() - when) // 60)} min ago)" if when else ""))
+        return head + "\n" + json.dumps(rows, default=_plain, ensure_ascii=False)
 
     def _person(self, who):
         self.app.log(f"Ask GOLD: looking up {who} in the Org Chart...")
@@ -359,9 +392,19 @@ class GoldReader:
         w.ensure_browser()
         if not oo._on_order_page(w.driver, order):
             self.app.log(f"Ask GOLD: opening {order}...")
-            oo.open_orders_tab(w.driver, w.wait, discard_changes=True)
-            oo.untick_my_orders(w.driver)
-            oo.open_result(w.driver, w.wait, oo.search_order(w.driver, w.wait, order), order)
+            for attempt in range(2):
+                try:
+                    oo.open_orders_tab(w.driver, w.wait, discard_changes=True)
+                    oo.untick_my_orders(w.driver)
+                    oo.open_result(w.driver, w.wait, oo.search_order(w.driver, w.wait, order), order)
+                    break
+                except RuntimeError as e:
+                    if attempt or "not found" in str(e):
+                        raise
+                    # The search page left by the My Orders read sometimes ignores clicks: start afresh
+                    import open_gold as og
+                    w.driver.get(og.GOLD_URL)
+                    og.wait_for_gold(w.driver, 60)
         titles = [t for t, _ in oo.list_tabs(w.driver)]
         match = (next((t for t in titles if t.lower() == tab.lower()), None)
                  or next((t for t in titles if t.lower().startswith(tab.lower())), None)
@@ -397,9 +440,16 @@ How to work:
 - Answer from GOLD data only, read with your tools. Never guess or invent values: if something is not in \
 GOLD, say so plainly. Your tools are read-only; you cannot change anything in GOLD - if asked to, explain \
 that and point to the right GOLD Express tab (Revised Target Date, Bulk Order Assignment) or GOLD itself.
-- Start with get_order_overview; use read_order_tab for details (e.g. Pricing lines, every milestone, full \
-notes, site address). When the user does not repeat the order number, use the order(s) from earlier in \
-the conversation. If no order number is known, ask for it.
+- Answer quickly: read as little as the question needs.
+  - The user's own orders (status, customer, customer site ref, service, target date, type): my_orders is \
+instant - use it first for those.
+  - One kind of fact: read_order_tab with the one tab that holds it - deadlines / milestones / dates: \
+Milestones; STM and other people: Teams; prices and charges: Pricing; site address: Billing; status, \
+customer, project and key dates: Information; notes: Notes; documents: Documents.
+  - get_order_overview (slow) only for a summary of an order or questions that need several tabs at once.
+  - When you need several things, ask for all of them in one step (several tool calls at once).
+- When the user does not repeat the order number, use the order(s) from earlier in the conversation. If \
+no order number is known, ask for it.
 - The order open in GOLD Express's Order explorer is given with each question: questions that name no \
 order ("what are the deadlines?", "who is the STM?") are about that order.
 - For a person's email, phone, job or manager, use find_person (Orange Business Org Chart) with the name \
@@ -428,33 +478,50 @@ user's attention (a passed deadline, a missing owner), say so in one bullet afte
 class Chat:
     """One conversation with Claude. ask() runs on the worker thread."""
 
-    def __init__(self, key, reader):
+    def __init__(self, key, reader, model=MODEL, effort="medium", fast=False):
         import anthropic
         self.anthropic = anthropic
         self.client = anthropic.Anthropic(api_key=key, max_retries=3, timeout=180)
         self.reader = reader
         self.messages = []
+        self.model, self.effort, self.fast = model, effort, fast
 
-    def ask(self, question, progress=lambda text: None, context=""):
+    def _request(self):
+        betas = ["server-side-fallback-2026-07-01"]  # if a safety check declines, another model answers
+        extra = {}
+        if self.fast:  # Opus fast mode (research preview): faster output, higher price
+            betas.append("fast-mode-2026-02-01")
+            extra["extra_body"] = {"speed": "fast"}
+        return dict(model=self.model, max_tokens=16000, system=system_prompt(),
+                    # strict: Claude's arguments always match the schemas exactly
+                    tools=[{**t, "strict": True} for t in TOOLS], messages=self.messages,
+                    output_config={"effort": self.effort}, cache_control={"type": "ephemeral"},
+                    betas=betas, fallbacks="default", **extra)
+
+    def _call(self, on_text=None):
+        """One request, streamed. If fast mode is not available for this key, it carries on without it."""
+        try:
+            with self.client.beta.messages.stream(**self._request()) as stream:
+                if on_text:
+                    for event in stream:
+                        if event.type == "content_block_delta" and getattr(event.delta, "type", "") == "text_delta":
+                            on_text(event.delta.text)
+                return stream.get_final_message()
+        except (self.anthropic.BadRequestError, self.anthropic.PermissionDeniedError) as e:
+            if not self.fast or not any(w in str(e).lower() for w in ("speed", "fast")):
+                raise
+            self.fast = False
+            return self._call(on_text)
+
+    def ask(self, question, progress=lambda text: None, context="", on_text=None):
         """Send the user's question; run the tools Claude asks for; return the answer (markdown).
-        context is added to this question only, e.g. which order is open in the Order explorer."""
+        context is added to this question only, e.g. which order is open in the Order explorer.
+        on_text(piece) receives the answer's text as it is written (to show it straight away)."""
         self.messages.append({"role": "user",
                               "content": f"[{context}]\n\n{question}" if context else question})
         try:
             for _ in range(MAX_STEPS):
-                with self.client.beta.messages.stream(
-                        model=MODEL,
-                        max_tokens=16000,
-                        system=system_prompt(),
-                        # strict: Claude's arguments always match the schemas exactly
-                        tools=[{**t, "strict": True} for t in TOOLS],
-                        messages=self.messages,
-                        output_config={"effort": "medium"},
-                        cache_control={"type": "ephemeral"},
-                        betas=["server-side-fallback-2026-07-01"],  # if a safety check declines, another model answers
-                        fallbacks="default",
-                ) as stream:
-                    response = stream.get_final_message()
+                response = self._call(on_text)
                 self.messages.append({"role": "assistant", "content": response.content})
                 if response.stop_reason == "refusal":
                     return "I can't help with that request."
@@ -468,6 +535,8 @@ class Chat:
                 for call in calls:
                     if call.name == "find_person":
                         progress(f"Looking up {call.input.get('person', '')} in the Org Chart...")
+                    elif call.name == "my_orders":
+                        progress("Checking your orders...")
                     else:
                         what = call.input.get("tab") or "overview"
                         progress(f"Reading {call.input.get('order', '')} - {what}...")

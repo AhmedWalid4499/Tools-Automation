@@ -78,6 +78,7 @@ def read_my_orders(driver, wait, log=print):
     was_ticked = cb.is_selected()
     if not was_ticked:
         cb.click()
+    page = 1
     try:
         old = driver.find_element(By.TAG_NAME, "body")
         box = driver.find_element(By.ID, "orderNb")
@@ -101,6 +102,13 @@ def read_my_orders(driver, wait, log=print):
             orders += new
         return orders
     finally:
+        if page > 1:  # back to page 1: GOLD keeps the page for the next search, whose row clicks then miss
+            try:
+                old = driver.find_element(By.TAG_NAME, "body")
+                driver.execute_script("gotoPage(1, 'OrderManager');")
+                _wait_results(driver, old)
+            except Exception:
+                pass
         if not was_ticked:  # leave the search page as the rest of the app expects it
             try:
                 driver.find_element(By.ID, "myOrdersOnlyCB").click()

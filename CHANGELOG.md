@@ -1,5 +1,14 @@
 # GOLD Express - what's new
 
+## 2.6.0
+- **A much quicker GOLD bot**: questions about your orders ("which are late?") are answered
+  in seconds from My Orders, and order questions read only the tab they need (Teams for the STM,
+  Milestones for deadlines) instead of the whole order.
+- **See the answer as it is written**: the bot shows its words while it is still answering.
+- **Fast or Thorough**: Settings > GOLD bot answers. Fast (the default) answers quicker;
+  Thorough takes a little longer to think on harder questions.
+- Fixed: the bot sometimes could not open an order right after My Orders was refreshed.
+
 ## 2.5.0
 - **Meet the Friendly GOLD bot** (was Ask GOLD): an animated bot that floats on the welcome screen,
   bobs along while it works, and hops when you click it. It greets you and answers as "GOLD bot".

@@ -77,7 +77,7 @@ def load_settings():
          # Windows notifications
          "notify_on": True, "notify_orders": True, "notify_every": "30", "notify_digest": True,
          "notify_updates": True, "notify_tasks": True, "notified_version": "", "digest_date": "",
-         "theme": "light", "save_chats": True}
+         "theme": "light", "save_chats": True, "bot_speed": "fast"}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1069,6 +1069,20 @@ class App(tk.Tk):
                             command=lambda: (close(), self._set_theme(theme.get()))).pack(side="left", padx=(0, 4))
         tk.Label(look, text="GOLD Express restarts to switch", bg=CARD, fg=MUTED, font=(FONT, 8)).pack(
             side="left", padx=10)
+        speed_row = tk.Frame(body, background=CARD)
+        speed_row.grid(row=21, column=0, columnspan=4, sticky="w", pady=(8, 2))
+        tk.Label(speed_row, text="GOLD bot answers", bg=CARD, fg=INK, font=(FONT, 9)).pack(side="left", padx=(0, 10))
+        speed = tk.StringVar(value=self.settings.get("bot_speed", "fast"))
+
+        def set_speed():
+            self.settings["bot_speed"] = speed.get()
+            save_settings(self.settings)
+            self.chat = None  # the next question uses the new setting (the conversation is kept)
+        for value, label in (("fast", "Fast"), ("thorough", "Thorough")):
+            ttk.Radiobutton(speed_row, text=label, value=value, variable=speed, style="SegSm.TRadiobutton",
+                            command=set_speed).pack(side="left", padx=(0, 4))
+        tk.Label(speed_row, text="Fast: quick answers (recommended).  Thorough: thinks longer.", bg=CARD,
+                 fg=MUTED, font=(FONT, 8)).pack(side="left", padx=10)
 
         ttk.Label(body, text="Notifications", style="CardHead.TLabel").grid(
             row=13, column=0, sticky="w", columnspan=4, pady=(16, 2))
@@ -3080,7 +3094,15 @@ class App(tk.Tk):
                        + ". Questions that name no order are about it.")
 
         def progress(text):
+            written.clear()
             self.ui(lambda: self._ask_thinking(text.rstrip(".")))
+
+        written = []
+
+        def typing(piece):  # the answer as it is being written: show its latest words straight away
+            written.append(piece)
+            preview = " ".join("".join(written).replace("*", "").replace("#", "").split())
+            self.ui(lambda p=preview: self._ask_thinking("Writing: " + (p[-110:] if len(p) > 110 else p)))
 
         def driver():
             self.worker.ensure_browser()
@@ -3092,7 +3114,8 @@ class App(tk.Tk):
             key = gai.get_key(chosen, AI_KEY_CACHE, driver, self.log)
             history = self.chat.messages if self.chat else getattr(self, "ask_restore", None) or []
             self.ask_restore = None
-            self.chat = gai.Chat(key, gai.GoldReader(self))
+            fast = self.settings.get("bot_speed", "fast") == "fast"  # Settings > GOLD bot answers
+            self.chat = gai.Chat(key, gai.GoldReader(self), effort="low" if fast else "medium", fast=fast)
             self.chat.messages = history
 
         def job():
@@ -3101,12 +3124,12 @@ class App(tk.Tk):
                     progress("Connecting to the AI service")
                     connect()
                 try:
-                    return True, self.chat.ask(question, progress, context)
+                    return True, self.chat.ask(question, progress, context, on_text=typing)
                 except Exception as e:
                     if not isinstance(e, self.chat.anthropic.AuthenticationError) or chosen:
                         raise
                     connect(fresh=True)
-                    return True, self.chat.ask(question, progress, context)
+                    return True, self.chat.ask(question, progress, context, on_text=typing)
             except Exception as e:  # shown in the chat, not as a pop-up
                 (HERE / "gold_app_error.log").write_text(traceback.format_exc(), encoding="utf-8")
                 return False, gai.friendly_error(e)
