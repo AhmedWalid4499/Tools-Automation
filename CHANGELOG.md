@@ -1,5 +1,18 @@
 # GOLD Express - what's new
 
+## 2.5.0
+- **Meet the Friendly GOLD bot** (was Ask GOLD): an animated bot that floats on the welcome screen,
+  bobs along while it works, and hops when you click it. It greets you and answers as "GOLD bot".
+- **Copy from any table, like Excel**: click a cell (orange outline) or drag across cells, then
+  Ctrl+C; right-click to copy the cell, the selection, the row, the column or the whole table
+  (pastes into Excel as cells). Works in My Orders, Overview, Org Chart, DPM names, Teams, Documents,
+  the order tabs and the bot's answers.
+- **Drag down to fill** in Revised Target Date and Order assignment: select a cell and drag the
+  small orange square down (or Ctrl+D) to copy its value into the rows below.
+- **Neat tables in the Order explorer**: Milestones, Pricing, Notes and every other tab show their
+  tables as real tables with a "Copy table" button; completed milestones in green, open ones past
+  their target date in red.
+
 ## 2.4.0
 - **Dark mode**: Settings > Appearance, or "Dark mode" at the bottom of the side menu (GOLD Express
   restarts to switch).

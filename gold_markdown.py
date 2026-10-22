@@ -99,18 +99,26 @@ def _table(text, rows, width):
                            justify="left", wraplength=widths[c], padx=8, pady=4,
                            font=(md["font"], 9, "bold" if bold else "normal"))
             lab.grid(row=r, column=c, sticky="nsew", padx=(0, 1), pady=(0, 1))
-            lab.bind("<Button-3>", lambda e, rows=rows: _table_menu(text, e, rows))
+            lab.bind("<Button-3>", lambda e, rows=rows, r=r, c=c: _table_menu(text, e, rows, r, c))
     idx = text.index("end-1c")
     text.window_create(idx, window=outer)
     text.tag_add("tbl", idx)
     text.insert("end", "\n", ("tbl",))
 
 
-def _table_menu(text, event, rows):
+def _table_menu(text, event, rows, r=None, c=None):
+    """Right-click on an answer's table: copy the cell, its row, its column or the whole table."""
+    def put(s):
+        text.clipboard_clear()
+        text.clipboard_append(s)
     menu = tk.Menu(text, tearoff=0)
-    tsv = "\n".join("\t".join(_plain(c) for c in row) for row in rows)
-    menu.add_command(label="Copy table (paste into Excel)",
-                     command=lambda: (text.clipboard_clear(), text.clipboard_append(tsv)))
+    cell = lambda row, i: _plain(row[i]) if i < len(row) else ""
+    if r is not None and c is not None:
+        menu.add_command(label="Copy cell", command=lambda: put(cell(rows[r], c)))
+        menu.add_command(label="Copy row", command=lambda: put("\t".join(_plain(x) for x in rows[r])))
+        menu.add_command(label="Copy column", command=lambda: put("\n".join(cell(row, c) for row in rows)))
+    menu.add_command(label="Copy whole table (paste into Excel)",
+                     command=lambda: put("\n".join("\t".join(_plain(x) for x in row) for row in rows)))
     menu.tk_popup(event.x_root, event.y_root)
 
 

@@ -386,7 +386,7 @@ class GoldReader:
 
 def system_prompt():
     today = date.today().strftime("%A %d %B %Y")
-    return f"""You are "Ask GOLD", the assistant inside GOLD Express, a desktop app used by Orange Business \
+    return f"""You are the Friendly GOLD bot, the assistant inside GOLD Express, a desktop app used by Orange Business \
 delivery teams (STMs, DPMs, project managers) to work with GOLD (Global Order Lifecycle Delivery), Orange \
 Business's order management system. Today is {today}.
 

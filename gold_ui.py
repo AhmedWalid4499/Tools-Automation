@@ -409,6 +409,84 @@ class Progress(tk.Canvas, _Redraw):
             self.create_image(0, 0, image=bar, anchor="nw")
 
 
+class Bot(tk.Canvas):
+    """The Friendly GOLD bot, animated: it floats gently above its shadow ("idle"), bobs faster with a
+    little wiggle while it works ("busy"), and hops when clicked."""
+
+    _cache = {}
+
+    def __init__(self, parent, image_path, size=120, bg=CARD, mode="idle", clickable=True):
+        w, h = int(size * 1.0), int(size * 1.22)
+        super().__init__(parent, width=w, height=h, background=bg, highlightthickness=0, borderwidth=0)
+        self.size, self.mode, self._job, self._i = size, mode, None, 0
+        self.frames = {m: self._frames(image_path, size, m, bg) for m in ("idle", "busy", "hop")}
+        self._item = self.create_image(w // 2, 0, anchor="n")
+        if clickable:
+            self.configure(cursor="hand2")
+            self.bind("<Button-1>", lambda e: self.hop())
+        self.start(mode)
+
+    @classmethod
+    def _frames(cls, path, size, mode, bg):
+        import math
+        key = (str(path), size, mode, bg)
+        if key in cls._cache:
+            return cls._cache[key]
+        bot = Image.open(path).convert("RGBA")
+        bot.thumbnail((int(size * 0.92), int(size * 0.92)), Image.LANCZOS)
+        w, h = int(size * 1.0), int(size * 1.22)
+        n = {"idle": 36, "busy": 16, "hop": 14}[mode]
+        frames = []
+        for i in range(n):
+            t = i / n
+            if mode == "hop":  # one quick jump
+                lift = math.sin(math.pi * t) * 0.16
+                angle = math.sin(2 * math.pi * t) * 6
+            else:
+                lift = (math.sin(2 * math.pi * t) + 1) / 2 * (0.06 if mode == "idle" else 0.09)
+                angle = math.sin(4 * math.pi * t) * 4 if mode == "busy" else 0
+            im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            # shadow: smaller and lighter when the bot is higher
+            sw = w * (0.62 - lift * 1.4)
+            sy = h - h * 0.07
+            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            alpha = int(70 - lift * 250) if not DARK else int(110 - lift * 300)
+            ImageDraw.Draw(shadow).ellipse((w / 2 - sw / 2, sy - h * 0.035, w / 2 + sw / 2, sy + h * 0.035),
+                                           fill=(120, 160, 220, max(alpha, 20)) if not DARK else (0, 0, 0, max(alpha, 30)))
+            im.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(1, size // 40))))
+            b = bot.rotate(angle, resample=Image.BICUBIC, expand=True) if angle else bot
+            top = int(h * 0.02 + (0.12 - lift) * size * 0.9)
+            im.alpha_composite(b, ((w - b.width) // 2, max(0, top)))
+            frames.append(ImageTk.PhotoImage(im))
+        cls._cache[key] = frames
+        return frames
+
+    def start(self, mode="idle"):
+        self.mode, self._i = mode, 0
+        if self._job is None:
+            self._tick()
+
+    def hop(self):
+        if self.mode != "busy":
+            self.start("hop")
+
+    def stop(self):
+        if self._job:
+            self.after_cancel(self._job)
+            self._job = None
+
+    def _tick(self):
+        if not self.winfo_exists():
+            return
+        frames = self.frames[self.mode]
+        self.itemconfigure(self._item, image=frames[self._i % len(frames)])
+        self._i += 1
+        if self.mode == "hop" and self._i >= len(frames):
+            self.mode, self._i = "idle", 0
+        delay = {"idle": 70, "busy": 50, "hop": 35}[self.mode]
+        self._job = self.after(delay, self._tick)
+
+
 class Pill(tk.Canvas):
     """A small rounded label (status, tags). set(text, fg, bg)."""
 
@@ -478,6 +556,143 @@ class Bubble(tk.Canvas):
         self._img = ImageTk.PhotoImage(rounded_image(w, h, min(18, h // 2), fill))
         self.create_image(0, 0, image=self._img, anchor="nw")
         self.create_text(16, 10, text=wrapped, anchor="nw", fill=fg, font=f)
+
+
+class TableCopy:
+    """Excel-like copying for a ttk.Treeview: click a cell to select it (orange outline), drag to select a
+    block of cells, Ctrl+C to copy; right-click for cell / selection / row / column / whole table. Copied text
+    is tab-separated, so it pastes into Excel as cells. Does not change the tree's own row selection."""
+
+    def __init__(self, tree, on_copy=None, menu=True):
+        self.tree, self.on_copy = tree, on_copy
+        self.anchor = self.cur = None
+        self.on_draw = None  # called with the block's (x0, y0, x1, y1), or None when nothing is shown
+        self.edges = [tk.Frame(tree, background=ORANGE) for _ in range(4)]
+        tree.bind("<Button-1>", self._press, add="+")
+        tree.bind("<B1-Motion>", self._drag, add="+")
+        for seq in ("<Control-c>", "<Control-C>"):
+            tree.bind(seq, lambda e: (self.copy_selection(), "break")[1], add="+")
+        for seq in ("<Configure>", "<MouseWheel>", "<KeyRelease>", "<Motion>"):
+            tree.bind(seq, lambda e: tree.after_idle(self._draw), add="+")
+        if menu:
+            tree.bind("<Button-3>", self._menu, add="+")
+
+    # --- geometry
+    def _columns(self):
+        dc = self.tree["displaycolumns"]
+        return list(self.tree["columns"]) if not dc or dc[0] == "#all" else list(dc)
+
+    def _rows(self):
+        out = []
+
+        def walk(parent):
+            for i in self.tree.get_children(parent):
+                out.append(i)
+                if self.tree.item(i, "open"):
+                    walk(i)
+        walk("")
+        return out
+
+    def _cell_at(self, e):
+        if self.tree.identify_region(e.x, e.y) not in ("cell", "tree"):
+            return None
+        row, col = self.tree.identify_row(e.y), self.tree.identify_column(e.x)
+        cols = self._columns()
+        try:
+            n = int(col.lstrip("#"))
+        except ValueError:
+            return None
+        if not row or n < 1 or n > len(cols):
+            return None
+        return row, cols[n - 1]
+
+    def _press(self, e):
+        cell = self._cell_at(e)
+        self.anchor = self.cur = cell
+        self.tree.focus_set()
+        self._draw()
+
+    def _drag(self, e):
+        cell = self._cell_at(e)
+        if cell and self.anchor:
+            self.cur = cell
+            self._draw()
+
+    def block(self):
+        """(rows, columns) of the selected block, top-left to bottom-right."""
+        if not self.anchor or not self.cur:
+            return [], []
+        rows, cols = self._rows(), self._columns()
+        try:
+            r = sorted((rows.index(self.anchor[0]), rows.index(self.cur[0])))
+            c = sorted((cols.index(self.anchor[1]), cols.index(self.cur[1])))
+        except ValueError:
+            return [], []
+        return rows[r[0]:r[1] + 1], cols[c[0]:c[1] + 1]
+
+    def _draw(self):
+        for f in self.edges:
+            f.place_forget()
+        rows, cols = self.block()
+        tl = self.tree.bbox(rows[0], cols[0]) if rows else None
+        br = self.tree.bbox(rows[-1], cols[-1]) if rows else None
+        if not tl or not br:
+            if self.on_draw:
+                self.on_draw(None)
+            return
+        x0, y0 = tl[0], tl[1]
+        x1, y1 = br[0] + br[2], br[1] + br[3]
+        t = 2
+        for f, (x, y, w, h) in zip(self.edges, ((x0, y0, x1 - x0, t), (x0, y1 - t, x1 - x0, t),
+                                                 (x0, y0, t, y1 - y0), (x1 - t, y0, t, y1 - y0))):
+            f.place(x=x, y=y, width=max(w, 1), height=max(h, 1))
+        if self.on_draw:
+            self.on_draw((x0, y0, x1, y1))
+
+    # --- copying
+    def _text(self, rows, cols, header=False):
+        lines = ["\t".join(self.tree.heading(c, "text") for c in cols)] if header else []
+        lines += ["\t".join(str(self.tree.set(r, c)) for c in cols) for r in rows]
+        return "\n".join(lines)
+
+    def _put(self, text, what):
+        self.tree.clipboard_clear()
+        self.tree.clipboard_append(text)
+        if self.on_copy:
+            self.on_copy(what)
+
+    def copy_selection(self):
+        rows, cols = self.block()
+        if rows:
+            self._put(self._text(rows, cols), f"Copied {len(rows)} x {len(cols)} cell(s)"
+                      if len(rows) * len(cols) > 1 else "Copied the cell")
+
+    def copy_table(self):
+        self._put(self._text(self._rows(), self._columns(), header=True), "Copied the whole table")
+
+    def add_items(self, menu, row=None, col=None):
+        """Copy commands for a right-click menu (row / col: the clicked cell)."""
+        if row and col:
+            menu.add_command(label="Copy cell", command=lambda: self._put(str(self.tree.set(row, col)), "Copied the cell"))
+        rows, cols = self.block()
+        if rows and len(rows) * len(cols) > 1:
+            menu.add_command(label=f"Copy selection ({len(rows)} x {len(cols)})", command=self.copy_selection)
+        if row:
+            menu.add_command(label="Copy row", command=lambda: self._put(self._text([row], self._columns()), "Copied the row"))
+        if col:
+            menu.add_command(label="Copy column", command=lambda: self._put(
+                "\n".join([self.tree.heading(col, "text")] + [str(self.tree.set(r, col)) for r in self._rows()]),
+                "Copied the column"))
+        menu.add_command(label="Copy whole table (paste into Excel)", command=self.copy_table)
+
+    def _menu(self, e):
+        cell = self._cell_at(e)
+        if cell and not (self.anchor and cell[0] in self.block()[0] and cell[1] in self.block()[1]):
+            self.anchor = self.cur = cell
+            self._draw()
+        m = tk.Menu(self.tree, tearoff=0)
+        self.add_items(m, *(cell or (None, None)))
+        m.tk_popup(e.x_root, e.y_root)
 
 
 class SideNav(tk.Frame):

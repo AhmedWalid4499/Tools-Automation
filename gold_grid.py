@@ -47,7 +47,71 @@ class EditGrid(tk.Frame):
         self.tree.bind("<Control-v>", lambda e: (self.paste(), "break")[1])
         self.tree.bind("<Control-V>", lambda e: (self.paste(), "break")[1])
         self.tree.bind("<Delete>", lambda e: self.delete_selected())
+        # Excel-like: click / drag to select cells, Ctrl+C to copy, Ctrl+D or the fill handle to fill down
+        self.copier = gui.TableCopy(self.tree)
+        self.copier.on_draw = self._place_handle
+        self.handle = tk.Frame(self.tree, background=gui.ORANGE, width=9, height=9, cursor="crosshair",
+                               highlightthickness=1, highlightbackground=gui.CARD)
+        self.handle.bind("<ButtonPress-1>", self._fill_start)
+        self.handle.bind("<B1-Motion>", self._fill_drag)
+        self.handle.bind("<ButtonRelease-1>", self._fill_end)
+        for seq in ("<Control-d>", "<Control-D>"):
+            self.tree.bind(seq, lambda e: (self.fill_down(), "break")[1])
+        self._fill_from = None
         self.add_rows(start_rows)
+
+    # ----- fill down (fill handle / Ctrl+D)
+    def _place_handle(self, box):
+        if box is None:
+            self.handle.place_forget()
+        else:
+            self.handle.place(x=box[2] - 5, y=box[3] - 5)
+            self.handle.lift()
+
+    def _fill_start(self, e):
+        self.close_editor(True)
+        self._fill_from = self.copier.block()  # the cells whose values are copied down
+
+    def _fill_drag(self, e):
+        if not self._fill_from or not self._fill_from[0]:
+            return
+        y = e.y_root - self.tree.winfo_rooty()
+        row = self.tree.identify_row(y)
+        rows = self.rows()
+        if row and rows.index(row) >= rows.index(self._fill_from[0][0]):
+            self.copier.anchor = (self._fill_from[0][0], self._fill_from[1][0])
+            self.copier.cur = (row, self._fill_from[1][-1])
+            self.copier._draw()
+        if y > self.tree.winfo_height() - 10:  # dragging past the bottom: scroll on
+            self.tree.yview_scroll(1, "units")
+
+    def _fill_end(self, e):
+        src = self._fill_from
+        self._fill_from = None
+        if not src or not src[0]:
+            return
+        rows, cols = self.copier.block()
+        self._fill(src[0], rows, cols)
+
+    def fill_down(self):
+        """Ctrl+D: the first row of the selected cells is copied into the rows below it."""
+        rows, cols = self.copier.block()
+        if len(rows) > 1:
+            self._fill(rows[:1], rows, cols)
+
+    def _fill(self, source_rows, target_rows, cols):
+        """Copy the source rows' values down over the target rows (a pattern repeats, like in Excel)."""
+        keys = [c for c in cols if c in self.keys]
+        if not keys or len(target_rows) <= len(source_rows):
+            return
+        values = {k: [self.get(r, k) for r in source_rows] for k in keys}
+        for n, iid in enumerate(target_rows[len(source_rows):]):
+            for k in keys:
+                self.set_value(iid, k, values[k][n % len(source_rows)])
+        if target_rows[-1] == self.rows()[-1]:
+            self.add_rows(10)
+        self._renumber()
+        self._changed()
 
     # ----- rows / values
     def rows(self):
@@ -178,6 +242,9 @@ class EditGrid(tk.Frame):
             return
         iid = self.tree.identify_row(event.y)
         key = self.all_keys[int(self.tree.identify_column(event.x)[1:]) - 1]
+        rows, cols = self.copier.block()
+        if len(rows) * len(cols) > 1:
+            return  # a block was dragged (to copy / fill): don't open the editor
         if iid and key in self.keys and len(self.tree.selection()) <= 1:
             self.edit(iid, key)
 

@@ -887,7 +887,7 @@ class App(tk.Tk):
         nav.add(my, "My Orders", "", "Your orders in GOLD (My orders only) at a glance")
         nav.add(overview, "Overview", "", "Key facts and delivery status of your orders")
         nav.add(explorer, "Order explorer", "", "Open an order, browse its tabs, export and download")
-        nav.add(ask, "Ask GOLD", "", "AI assistant - ask about deadlines, pricing, sites and people")
+        nav.add(ask, "GOLD bot", "", "The Friendly GOLD bot - ask about deadlines, pricing, sites and people")
         nav.section("Bulk updates")
         nav.add(rtdd, "Revised Target Date", "", "Add the Revised Target Date milestone to many orders")
         nav.add(assign, "Order assignment", "", "Make a DPM the primary STM of many orders")
@@ -918,6 +918,12 @@ class App(tk.Tk):
     def _page_changed(self, title, subtitle):
         self.page_title.configure(text=title)
         self.page_sub.configure(text=subtitle)
+
+    def _asset_path(self, name):
+        for base in (BUNDLE_DIR / "assets", Path(__file__).parent / "assets"):
+            if (base / name).exists():
+                return base / name
+        return None
 
     def _asset_image(self, name):
         for base in (BUNDLE_DIR / "assets", Path(__file__).parent / "assets"):
@@ -1204,6 +1210,7 @@ class App(tk.Tk):
         tf.pack(fill="both", expand=True)
         self.my_tree = ttk.Treeview(tf, columns=[c for c, _, _ in self.MY_COLUMNS], show="headings",
                                     selectmode="browse")
+        self.my_tree_copy = gui.TableCopy(self.my_tree, self.log, menu=False)  # Excel-like copying
         for c, t, w in self.MY_COLUMNS:
             self.my_tree.heading(c, text=t, anchor="w", command=lambda c=c: self._my_sort(c))
             self.my_tree.column(c, width=int(w * scale), minwidth=int(70 * scale), anchor="w",
@@ -1424,10 +1431,14 @@ class App(tk.Tk):
         m.add_command(label="Open in Order explorer", command=lambda: self._my_open(iid))
         m.add_command(label="Show in Overview", command=lambda: (self.notebook.select(self.overview_frame),
                                                                  self.ov_input.set(iid), self._ov_run()))
-        m.add_command(label="Ask GOLD about it", command=lambda: (self.notebook.select(self.ask_frame),
+        m.add_command(label="Ask the GOLD bot about it", command=lambda: (self.notebook.select(self.ask_frame),
                                                                   self.order_var.set(iid), self._ask_tab_shown()))
         m.add_separator()
-        m.add_command(label="Copy order number", command=lambda: (self.clipboard_clear(), self.clipboard_append(iid)))
+        cell = self.my_tree_copy._cell_at(e)
+        if cell and cell[1] not in self.my_tree_copy.block()[1]:
+            self.my_tree_copy.anchor = self.my_tree_copy.cur = cell
+            self.my_tree_copy._draw()
+        self.my_tree_copy.add_items(m, *(cell or (iid, None)))
         m.tk_popup(e.x_root, e.y_root)
 
     def _my_export(self):
@@ -1510,6 +1521,7 @@ class App(tk.Tk):
         lf.pack(fill="both", expand=True)
         self.ov_list = ttk.Treeview(lf, columns=("order", "status", "days", "lead"), show="headings",
                                     selectmode="browse")
+        self.ov_list_copy = gui.TableCopy(self.ov_list, self.log, menu=True)  # Excel-like copying
         scale = self.winfo_fpixels("1i") / 96
         for c, w, t in [("order", 95, "Order"), ("status", 70, "Status"), ("days", 110, "Days left"),
                         ("lead", 80, "Lead time")]:
@@ -2151,6 +2163,7 @@ class App(tk.Tk):
         lf.pack(fill="both", expand=True)
         cols = ("name", "first", "last", "user", "check")
         self.names_tree = ttk.Treeview(lf, columns=cols, show="headings", selectmode="extended")
+        self.names_tree_copy = gui.TableCopy(self.names_tree, self.log, menu=True)  # Excel-like copying
         for c, w, t in [("name", 220, "Name"), ("first", 160, "GOLD first name"), ("last", 160, "GOLD last name"),
                         ("user", 120, "GOLD user"), ("check", 300, "Checked in GOLD")]:
             self.names_tree.heading(c, text=t, anchor="w")
@@ -2412,6 +2425,7 @@ class App(tk.Tk):
         tf.pack(fill="both", expand=True)
         self.oc_tree = ttk.Treeview(tf, columns=[c for c, _, _ in self.OC_COLUMNS], show="headings",
                                     selectmode="browse")
+        self.oc_tree_copy = gui.TableCopy(self.oc_tree, self.log, menu=True)  # Excel-like copying
         for c, t, w in self.OC_COLUMNS:
             self.oc_tree.heading(c, text=t, anchor="w")
             self.oc_tree.column(c, width=w, anchor="w")
@@ -2617,8 +2631,12 @@ class App(tk.Tk):
         # Header: what it does | order in context, New chat
         head = tk.Frame(f, background=CARD, padx=12, pady=4)
         head.pack(fill="x")
-        self.ask_hint = tk.Label(head, text="Reads GOLD and the Org Chart live for you - it never changes "
-                                            "anything.", bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w")
+        bot_png = self._asset_path("bot.png")
+        if bot_png:  # the bot itself, floating next to its name (click it!)
+            gui.Bot(head, bot_png, size=int(34 * scale), bg=CARD).pack(side="left", padx=(0, 8))
+        tk.Label(head, text="The Friendly GOLD bot", bg=CARD, fg=INK, font=(FONT, 11, "bold")).pack(side="left")
+        self.ask_hint = tk.Label(head, text="   reads GOLD and the Org Chart live for you - it never changes "
+                                            "anything", bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w")
         self.ask_hint.pack(side="left", fill="x", expand=True)
         self._btn(head, "＋  New chat", self._ask_new).pack(side="right")
         self.ask_chip = gui.Pill(head, "", ORANGE_DARK, ORANGE_SOFT, bg=CARD)
@@ -2679,7 +2697,7 @@ class App(tk.Tk):
         t.tag_configure("who", font=(FONT, 10, "bold"), foreground=INK, spacing1=16, spacing3=4)
         t.tag_raise("meta")
         t.tag_configure("center", justify="center")
-        t.tag_configure("hero", font=(FONT, 16, "bold"), foreground=INK, justify="center", spacing1=6)
+        t.tag_configure("hero", font=(FONT, 13, "bold"), foreground=INK, justify="center", spacing1=4)
         t.tag_configure("sub", font=(FONT, 10), foreground=MUTED, justify="center", spacing1=4, spacing3=16)
         t.tag_configure("err", foreground=RED, font=(FONT, 10), lmargin1=self.ASK_INDENT + 2,
                         lmargin2=self.ASK_INDENT + 2, spacing1=2, spacing3=6)
@@ -2687,6 +2705,8 @@ class App(tk.Tk):
                         spacing1=4, spacing3=6)
         # Mouse wheel over embedded tables / bubbles scrolls the chat
         t.bind_all("<MouseWheel>", self._ask_wheel, add="+")
+        self._ask_size_cards = lambda: None  # the welcome screen's cards follow the chat's width
+        t.bind("<Configure>", lambda e: self._ask_size_cards(), add="+")
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._ask_tab_shown(), add="+")
         self.ask_order = ""     # order the welcome screen / chip was drawn for
         self.ask_pending = None  # "thinking" row while a question runs
@@ -2758,7 +2778,7 @@ class App(tk.Tk):
 
     def _ask_avatar(self, t):
         if not getattr(self, "_avatar_img", None):
-            self._avatar_img = self._asset_image("logo_28.png")
+            self._avatar_img = self._asset_image("bot_28.png") or self._asset_image("logo_28.png")
         t.window_create("end", window=tk.Label(t, image=self._avatar_img, bg=self.CHAT_BG, bd=0)
                         if self._avatar_img else tk.Label(t, text="GX", bg=ORANGE, fg="white",
                                                           font=(FONT, 8, "bold"), width=3, pady=2))
@@ -2770,22 +2790,36 @@ class App(tk.Tk):
         order = self.ask_order = self._ask_context_order()
 
         def write(t):
-            t.insert("end", "\n\n", ("center",))
-            self._ask_logo = self._ask_logo if getattr(self, "_ask_logo", None) else self._asset_image("logo_64.png")
-            t.window_create("end", window=tk.Label(t, image=self._ask_logo, bg=self.CHAT_BG) if self._ask_logo
-                            else tk.Label(t, text="✦", bg=ORANGE, fg="white", font=(FONT, 18, "bold"), width=2))
+            t.insert("end", "\n", ("center",))
+            bot_png = self._asset_path("bot.png")
+            scale = self.winfo_fpixels("1i") / 96
+            t.window_create("end", window=gui.Bot(t, bot_png, size=int(118 * scale), bg=self.CHAT_BG)
+                            if bot_png else tk.Label(t, text="✦", bg=ORANGE, fg="white", font=(FONT, 18, "bold")))
             t.tag_add("center", "end-2c")
-            t.insert("end", "\nHow can I help with your orders?\n", ("hero",))
-            t.insert("end", (f"Ask about order {order} (open in the Order explorer) or any other order."
-                             if order else "Ask about any GOLD order - type its number in your question.")
+            hour = datetime.now().hour
+            hello = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
+            t.insert("end", f"\n{hello}! I'm the Friendly GOLD bot\n", ("hero",))
+            t.insert("end", (f"Ask me anything about order {order} (open in the Order explorer) or any other order."
+                             if order else "Ask me anything about a GOLD order - deadlines, pricing, sites, people.")
                      + "\n", ("sub",))
             grid = tk.Frame(t, background=self.CHAT_BG)
-            card_w = min(380, max(330, (t.winfo_width() - 120) // 2))
+            cards = []
             for i, (title, desc, q) in enumerate(self.ASK_SUGGESTIONS):
                 question = q.format(order=order or "10-1234567")
                 card = gui.ClickCard(grid, title, desc, lambda q=question: self._ask_suggestion(q),
-                                     bg=self.CHAT_BG, width=card_w)
+                                     bg=self.CHAT_BG, width=int(200 * scale))
                 card.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
+                cards.append(card)
+
+            def size_cards(e=None):  # two cards per row, as wide as the chat allows
+                width = t.winfo_width()
+                if width < 200 or not grid.winfo_exists():
+                    return
+                w = min(int(380 * scale), (width - int(70 * scale)) // 2)
+                for c in cards:
+                    c.configure(width=max(w, int(160 * scale)))
+            self._ask_size_cards = size_cards
+            self.after(50, size_cards)
             t.window_create("end", window=grid)
             t.tag_add("center", "end-2c")
             t.insert("end", "\n", ("center",))
@@ -2972,7 +3006,13 @@ class App(tk.Tk):
                 t.mark_set("pending", "end-1c")
                 t.mark_gravity("pending", "left")
                 t.insert("end", "\n", ("who",))
-                self._ask_avatar(t)
+                bot_png = self._asset_path("bot.png")
+                if bot_png:  # the bot bobs along while it works
+                    t.window_create("end", window=gui.Bot(t, bot_png, size=int(40 * self.winfo_fpixels("1i") / 96),
+                                                          bg=self.CHAT_BG, mode="busy", clickable=False))
+                    t.insert("end", "  ", ("who",))
+                else:
+                    self._ask_avatar(t)
                 lab = tk.Label(t, bg=self.CHAT_BG, fg=MUTED, font=(FONT, 9, "italic"))
                 t.window_create("end", window=lab)
                 t.insert("end", "\n", ("who",))
@@ -3001,7 +3041,7 @@ class App(tk.Tk):
         def write(t):
             t.insert("end", "\n", ("who",))
             self._ask_avatar(t)
-            t.insert("end", "Ask GOLD", ("who",))
+            t.insert("end", "GOLD bot", ("who",))
             t.insert("end", "   " + datetime.now().strftime("%H:%M") + "\n", ("who", "meta"))
             if not ok:
                 t.insert("end", "⚠  " + answer + "\n", ("err",))
@@ -3087,14 +3127,15 @@ class App(tk.Tk):
         self.text = tk.Text(f, wrap="word", font=("Segoe UI", 10), relief="flat",
                             background=CARD, foreground=INK, insertbackground=INK, padx=10, pady=8)
         sb = ttk.Scrollbar(f, command=self.text.yview)
-        self.text.configure(yscrollcommand=sb.set, state="disabled", tabs=("260",))
+        tab = int(260 * self.winfo_fpixels("1i") / 96)
+        self.text.configure(yscrollcommand=sb.set, state="disabled", tabs=(str(tab),), highlightthickness=0,
+                            cursor="arrow")
         self.text.tag_configure("section", font=("Segoe UI Semibold", 11), foreground=ORANGE,
-                                spacing1=6, spacing3=2)
-        self.text.tag_configure("label", font=("Segoe UI Semibold", 10))
-        self.text.tag_configure("mono", font=("Consolas", 9), wrap="none")
-        xs = ttk.Scrollbar(f, orient="horizontal", command=self.text.xview)
-        self.text.configure(xscrollcommand=xs.set)
-        xs.pack(side="bottom", fill="x")
+                                spacing1=10, spacing3=4)
+        self.text.tag_configure("label", font=(FONT, 10), foreground=MUTED, spacing1=2, spacing3=2)
+        self.text.tag_configure("value", font=(FONT, 10), foreground=INK, lmargin2=tab + 8)
+        self._grid_fits = []  # tables in the view follow its width
+        self.text.bind("<Configure>", lambda e: [fit() for fit in self._grid_fits])
         sb.pack(side="right", fill="y")
         self.text.pack(fill="both", expand=True)
 
@@ -3107,6 +3148,7 @@ class App(tk.Tk):
         self._btn(bar, "Download selected", self.download, "Accent.TButton").pack(side="right", padx=6)
         cols = ("n", "title", "modified", "type", "saved")
         self.docs_tree = ttk.Treeview(f, columns=cols, show="headings", selectmode="extended")
+        self.docs_tree_copy = gui.TableCopy(self.docs_tree, self.log, menu=True)  # Excel-like copying
         for c, w, t in [("n", 40, "#"), ("title", 330, "Document"), ("modified", 170, "Last modified"),
                         ("type", 190, "Type"), ("saved", 200, "Downloaded")]:
             self.docs_tree.heading(c, text=t)
@@ -3133,6 +3175,7 @@ class App(tk.Tk):
         lf = ttk.Frame(panes)
         self.teams_tree = ttk.Treeview(lf, columns=("team", "primary", "count"), show="headings",
                                        selectmode="extended")
+        self.teams_tree_copy = gui.TableCopy(self.teams_tree, self.log, menu=True)  # Excel-like copying
         for c, w, t in [("team", 230, "Team"), ("primary", 200, "Primary member"), ("count", 80, "Members")]:
             self.teams_tree.heading(c, text=t)
             self.teams_tree.column(c, width=w, anchor="w")
@@ -3429,10 +3472,14 @@ class App(tk.Tk):
 
     # ----- fill views
     def _fill_text(self, data):
-        """Show extracted data: sections of Field / Value, then grids as aligned tables."""
+        """Show a GOLD tab: its fields as label / value pairs by section, then each of its tables as a real
+        table (headers, zebra rows, copy cells / rows / the whole table)."""
         t = self.text
         t.configure(state="normal")
         t.delete("1.0", "end")
+        for w in t.winfo_children():
+            w.destroy()
+        self._grid_fits = []
         if data.get("text"):
             t.insert("end", data["text"])
         section = None
@@ -3443,20 +3490,85 @@ class App(tk.Tk):
                     t.insert("end", ("\n" if t.index("end-1c") != "1.0" else "") + sec + "\n", "section")
             if field:
                 t.insert("end", f"  {field}", "label")
-                t.insert("end", f"\t{value}\n")
+                t.insert("end", f"\t{value}\n", "value")
             else:
-                t.insert("end", f"  {value}\n")
+                t.insert("end", f"  {value}\n", "value")
         for g in data["grids"]:
-            t.insert("end", "\n" + (g.get("title") or "Table") + f"  ({len(g['rows'])} rows)\n", "section")
-            cols = g["columns"]
-            widths = [min(max([len(c)] + [len(str(r[i])) for r in g["rows"]]), 34)
-                      for i, c in enumerate(cols)]
-            fmt = lambda row: "  ".join(str(v)[:w].ljust(w) for v, w in zip(row, widths)).rstrip()
-            t.insert("end", fmt(cols) + "\n", ("mono", "label"))
-            t.insert("end", "  ".join("─" * w for w in widths) + "\n", "mono")
-            for r in g["rows"]:
-                t.insert("end", fmt(r) + "\n", "mono")
+            t.insert("end", "\n" if t.index("end-1c") != "1.0" else "")
+            t.window_create("end", window=self._grid_table(t, g))
+            t.insert("end", "\n")
         t.configure(state="disabled")
+
+    def _grid_table(self, parent, g):
+        """One GOLD table as a neat, copyable table."""
+        scale = self.winfo_fpixels("1i") / 96
+        box = tk.Frame(parent, background=CARD, highlightthickness=1, highlightbackground=LINE, padx=10, pady=8)
+        head = tk.Frame(box, background=CARD)
+        head.pack(fill="x", pady=(0, 6))
+        tk.Label(head, text=g.get("title") or "Table", bg=CARD, fg=INK, font=(FONT, 10, "bold")).pack(side="left")
+        tk.Label(head, text=f"  {len(g['rows'])} rows", bg=CARD, fg=MUTED, font=(FONT, 9)).pack(side="left")
+        cols = [c or f"Column {i + 1}" for i, c in enumerate(g["columns"])]
+        ids = [f"c{i}" for i in range(len(cols))]
+        tf = tk.Frame(box, background=CARD)
+        tf.pack(fill="both", expand=True)
+        tree = ttk.Treeview(tf, columns=ids, show="headings", selectmode="browse",
+                            height=max(1, min(len(g["rows"]), 14)))
+        copy = gui.TableCopy(tree, self.log)
+        ttk.Button(head, text="Copy table", style="Small.TButton", command=copy.copy_table).pack(side="right")
+        from tkinter import font as tkfont
+        f_body, f_head = tkfont.Font(family=FONT, size=10), tkfont.Font(family=FONT, size=9, weight="bold")
+        for i, (cid, title) in enumerate(zip(ids, cols)):
+            longest = max([f_head.measure(title)] + [f_body.measure(str(r[i])) for r in g["rows"] if i < len(r)])
+            tree.heading(cid, text=title, anchor="w")
+            tree.column(cid, width=min(int(360 * scale), longest + int(24 * scale)), minwidth=int(50 * scale),
+                        anchor="w", stretch=True)
+        # milestone-like tables: done in green, open and past the target date in red
+        target = next((i for i, c in enumerate(cols) if c.lower().startswith("target date")), None)
+        completed = next((i for i, c in enumerate(cols) if c.lower().startswith("completed")), None)
+        today = datetime.now().date()
+        tree.tag_configure("odd", background=gui.ZEBRA)
+        tree.tag_configure("done", foreground=gui.GREEN_FG)
+        tree.tag_configure("late", foreground=gui.RED_FG)
+        for n, r in enumerate(g["rows"]):
+            tags = ["odd"] if n % 2 else []
+            if completed is not None and completed < len(r) and str(r[completed]).strip():
+                tags.append("done")
+            elif target is not None and target < len(r):
+                try:
+                    if gm.parse_date(str(r[target])) < today:
+                        tags.append("late")
+                except (ValueError, TypeError):
+                    pass
+            tree.insert("", "end", values=[str(v) for v in r] + [""] * (len(cols) - len(r)), tags=tags)
+        xs = ttk.Scrollbar(tf, orient="horizontal", command=tree.xview)
+        tree.configure(xscrollcommand=xs.set)
+        if len(g["rows"]) > 14:
+            ys = ttk.Scrollbar(tf, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=ys.set)
+            ys.pack(side="right", fill="y")
+        tree.pack(fill="both", expand=True)
+        natural = [tree.column(c, "width") for c in ids]
+        least = int(80 * scale)
+
+        def fit(e=None):  # the table takes the page's width; columns share it; scroll sideways only if needed
+            if not box.winfo_exists():
+                return
+            w = max(self.text.winfo_width() - int(40 * scale), int(300 * scale))
+            room = w - int(30 * scale)
+            widths = natural if sum(natural) <= room else [max(least, int(n * room / sum(natural))) for n in natural]
+            for c, cw in zip(ids, widths):
+                tree.column(c, width=cw)
+            if sum(widths) > room:
+                xs.pack(side="bottom", fill="x", before=tree)
+            else:
+                xs.pack_forget()
+            box.update_idletasks()
+            h = head.winfo_reqheight() + tf.winfo_reqheight() + 2 * int(box.cget("pady")) + 8
+            box.configure(width=w, height=h)
+        box.pack_propagate(False)
+        self._grid_fits.append(fit)
+        fit()
+        return box
 
     def _fill_docs(self, docs, keep_saved=False):
         if not keep_saved:
