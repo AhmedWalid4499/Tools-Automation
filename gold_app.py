@@ -756,7 +756,7 @@ class App(tk.Tk):
         bar = top.body
         tk.Label(bar, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 13)).pack(side="left", padx=(4, 8))
         self.order_var = tk.StringVar()
-        ent = ttk.Entry(bar, textvariable=self.order_var, width=16, font=(FONT, 12))
+        ent = ttk.Entry(bar, textvariable=self.order_var, width=16, font=(FONT, 10))
         ent.pack(side="left", padx=(0, 8))
         ent.bind("<Return>", lambda e: self.open_order())
         ent.focus_set()
@@ -913,7 +913,7 @@ class App(tk.Tk):
                 ("due", "Due in 30 days", "", "v_orange", lambda: self._my_set_filter(when="due30")),
                 ("late", "Past target date", "", "v_rose", lambda: self._my_set_filter(when="late")),
                 ("customers", "Customers", "", "v_purple", lambda: self._my_set_filter(scope="all")))):
-            card = gui.StatCard(kpi, caption, icon, palette, sub_lines=1, big_size=19, command=action)
+            card = gui.StatCard(kpi, caption, icon, palette, sub_lines=1, big_size=15, command=action)
             card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
             kpi.columnconfigure(col, weight=1, uniform="mykpi")
             self.my_cards[key] = card
@@ -1179,7 +1179,7 @@ class App(tk.Tk):
         bar = tk.Frame(top.body, background=CARD)
         bar.pack(fill="x")
         self.ov_input = tk.StringVar()
-        ent = ttk.Entry(bar, textvariable=self.ov_input, width=20, font=(FONT, 11))
+        ent = ttk.Entry(bar, textvariable=self.ov_input, width=20, font=(FONT, 10))
         ent.pack(side="left", fill="x", expand=True)
         ent.bind("<Return>", lambda e: self._ov_run())
         self._btn(bar, "Show overview", self._ov_run, "Accent.TButton").pack(side="left", padx=(8, 0))
@@ -1198,7 +1198,7 @@ class App(tk.Tk):
         for col, (key, caption, icon, palette) in enumerate((
                 ("all", "Orders", "", "lavender"), ("Green", "On track", "", "mint"),
                 ("Amber", "Due soon", "", "amber"), ("Red", "Late", "", "rose"))):
-            card = gui.StatCard(strip, caption, icon, palette, sub_lines=1, big_size=22)
+            card = gui.StatCard(strip, caption, icon, palette, sub_lines=1, big_size=15)
             card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
             strip.columnconfigure(col, weight=1, uniform="ovsum")
             self.ov_summary[key] = card
@@ -1244,7 +1244,7 @@ class App(tk.Tk):
                                                     ("delivery", "Delivery status", ""),
                                                     ("lead", "120-day lead time", ""))):
             card = gui.StatCard(cards, caption, icon, "sun" if key == "value" else "grey", sub_lines=2,
-                                big_size=20, bg=CARD)
+                                big_size=14, bg=CARD)
             card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 10, 0))
             cards.columnconfigure(col, weight=1, uniform="ovcards")
             self.ov_cards[key] = card
@@ -2039,7 +2039,7 @@ class App(tk.Tk):
         bar = self._tile(f, pad=6, fill="x").body
         tk.Label(bar, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 13)).pack(side="left", padx=(4, 8))
         self.oc_query = tk.StringVar()
-        ent = ttk.Entry(bar, textvariable=self.oc_query, width=34, font=(FONT, 11))
+        ent = ttk.Entry(bar, textvariable=self.oc_query, width=34, font=(FONT, 10))
         ent.pack(side="left")
         ent.bind("<Return>", lambda e: self._oc_search())
         self._btn(bar, "Search", self._oc_search, "Accent.TButton").pack(side="left", padx=(8, 0))

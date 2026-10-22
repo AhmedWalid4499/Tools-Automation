@@ -182,16 +182,16 @@ class Tile(tk.Canvas, _Redraw):
 class StatCard(tk.Canvas, _Redraw):
     """A colourful gradient card: caption, big value, small text and an optional icon bubble."""
 
-    PAD = 16
+    PAD = 11
 
     def __init__(self, parent, caption="", icon="", palette="sun", sub_lines=2, big_size=24, bg=BG,
                  command=None, **kw):
-        self.f_cap = tkfont.Font(family=FONT, size=8, weight="bold")
-        self.f_sub = tkfont.Font(family=FONT, size=9)
+        self.f_cap = tkfont.Font(family=FONT, size=7, weight="bold")
+        self.f_sub = tkfont.Font(family=FONT, size=8)
         self.big_size = big_size
         big_ls = tkfont.Font(family="Segoe UI Light", size=big_size).metrics("linespace")
-        height = (self.PAD + self.f_cap.metrics("linespace") + 4 + big_ls + 4
-                  + sub_lines * self.f_sub.metrics("linespace") + self.PAD - 4)
+        height = (self.PAD + self.f_cap.metrics("linespace") + 2 + big_ls + 2
+                  + sub_lines * self.f_sub.metrics("linespace") + self.PAD - 2)
         super().__init__(parent, height=height, background=bg, highlightthickness=0, borderwidth=0, **kw)
         self.caption, self.icon, self.palette, self.sub_lines = caption, icon, palette, sub_lines
         self.big, self.sub = "-", ""
@@ -228,7 +228,7 @@ class StatCard(tk.Canvas, _Redraw):
         bubble = (self.f_cap.metrics("linespace") + 20) if self.icon else 0
         cap = fit_text(self.caption.upper(), self.f_cap, w - 2 * p - bubble, 1)
         self.create_text(p + 2, p, text=cap, anchor="nw", fill=accent, font=self.f_cap)
-        y = p + self.f_cap.metrics("linespace") + 4
+        y = p + self.f_cap.metrics("linespace") + 2
         size = self.big_size  # the big value on one line: a smaller font when it is long
         big = tkfont.Font(family="Segoe UI Light", size=size)
         while size > 11 and big.measure(self.big) > w - 2 * p - 4:
@@ -236,16 +236,16 @@ class StatCard(tk.Canvas, _Redraw):
             big = tkfont.Font(family="Segoe UI Light", size=size)
         self.create_text(p, y, text=self.big, anchor="nw", fill=ink,
                          font=tkfont.Font(family="Segoe UI Semibold" if vivid else "Segoe UI Light", size=size))
-        y += tkfont.Font(family="Segoe UI Light", size=self.big_size).metrics("linespace") + 4
+        y += tkfont.Font(family="Segoe UI Light", size=self.big_size).metrics("linespace") + 2
         self.create_text(p + 2, y, text=fit_text(self.sub, self.f_sub, w - 2 * p - 4, self.sub_lines),
                          anchor="nw", fill=sub_ink, font=self.f_sub)
         if self.icon:
-            d = self.f_cap.metrics("linespace") + 14
+            d = self.f_cap.metrics("linespace") + 10
             if self._bubble is None or self._bubble.width() != d or getattr(self, "_bubble_vivid", None) != vivid:
                 self._bubble = ImageTk.PhotoImage(rounded_image(d, d, d // 2, (255, 255, 255, 70 if vivid else 210)))
                 self._bubble_vivid = vivid
-            self.create_image(w - p + 6, p - 6, image=self._bubble, anchor="ne")
-            self.create_text(w - p + 6 - d // 2, p - 6 + d // 2, text=self.icon, fill=accent, font=(ICONS, 10))
+            self.create_image(w - p + 4, p - 4, image=self._bubble, anchor="ne")
+            self.create_text(w - p + 4 - d // 2, p - 4 + d // 2, text=self.icon, fill=accent, font=(ICONS, 8))
 
 
 class Donut(tk.Canvas, _Redraw):
@@ -530,9 +530,9 @@ def style_rounded(style, root):
         return photo(rounded_image(w, h, r, fill, outline, width=width))
 
     # Buttons: pills
-    W, H = 48, 36
+    W, H = 40, 26  # compact pills
     R = H // 2 - 1
-    b = dict(border=(R, R), sticky="nsew")
+    b = dict(border=(R, R), padding=(R // 2 + 2, 1), sticky="nsew")  # padding: not the corner size
     style.element_create("RButton.border", "image", img(W, H, R, CARD, "#DED9D1"),
                          ("disabled", img(W, H, R, "#F7F6F4", "#EEEBE6")),
                          ("pressed", img(W, H, R, "#FFEBD8", ORANGE)),
@@ -548,30 +548,30 @@ def style_rounded(style, root):
             ("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})])
     # the corners outside the pill show the style's background: keep it the tile's white in every state
     corners = [("disabled", CARD), ("pressed", CARD), ("active", CARD), ("!disabled", CARD)]
-    style.configure("TButton", padding=(18, 7), background=CARD, foreground=INK, width=-4)
+    style.configure("TButton", padding=(12, 2), background=CARD, foreground=INK, font=(FONT, 9), width=-4)
     style.map("TButton", background=corners, foreground=[("disabled", "#A0A4AB")])
-    style.configure("Accent.TButton", padding=(20, 7), foreground="white", font=(FONT, 10, "bold"),
+    style.configure("Accent.TButton", padding=(14, 2), foreground="white", font=(FONT, 9, "bold"),
                     background=CARD)
     style.map("Accent.TButton", foreground=[("disabled", "white")], background=corners)
-    style.configure("Side.TButton", padding=(16, 7), foreground=INK, anchor="w", font=(FONT, 10), background=CARD)
+    style.configure("Side.TButton", padding=(12, 4), foreground=INK, anchor="w", font=(FONT, 10), background=CARD)
     style.map("Side.TButton", foreground=[("active", ORANGE_DARK)], background=corners)
 
     # Fields: rounded
-    FR = 12
-    f = dict(border=(FR, FR), sticky="nsew")
+    FR = 9
+    f = dict(border=(FR, FR), padding=(6, 1), sticky="nsew")
     field = img(W, H, FR, "#FBFAF8", "#E3DED6")
     focus = img(W, H, FR, CARD, ORANGE, width=2)
     off = img(W, H, FR, "#F5F3F0", "#EEEBE6")
     style.element_create("REntry.field", "image", field, ("disabled", off), ("focus", focus), **f)
     style.layout("TEntry", [("REntry.field", {"sticky": "nsew", "children": [
         ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})])
-    style.configure("TEntry", padding=(12, 7), fieldbackground="#FBFAF8")
+    style.configure("TEntry", padding=(10, 3), fieldbackground="#FBFAF8")
     style.element_create("RCombo.field", "image", field, ("disabled", off), ("focus", focus), **f)
     style.layout("TCombobox", [("RCombo.field", {"sticky": "nsew", "children": [
         ("Combobox.downarrow", {"side": "right", "sticky": "ns"}),
         ("Combobox.padding", {"expand": "1", "sticky": "nsew", "children": [
             ("Combobox.textarea", {"sticky": "nsew"})]})]})])
-    style.configure("TCombobox", padding=(12, 6), arrowsize=14, background="#FBFAF8", arrowcolor=MUTED,
+    style.configure("TCombobox", padding=(10, 2), arrowsize=12, background="#FBFAF8", arrowcolor=MUTED,
                     fieldbackground="#FBFAF8")
     style.map("TCombobox", background=[("active", "#FBFAF8"), ("pressed", "#FBFAF8")],
               fieldbackground=[("readonly", "#FBFAF8")])
@@ -581,18 +581,18 @@ def style_rounded(style, root):
                          ("selected", img(W, H, R, ORANGE)), ("active", img(W, H, R, "#FFF7EF", "#FFB27A")), **b)
     style.layout("Seg.TRadiobutton", [("RSeg.border", {"sticky": "nsew", "children": [
         ("Radiobutton.padding", {"sticky": "nsew", "children": [("Radiobutton.label", {"sticky": "nsew"})]})]})])
-    style.configure("Seg.TRadiobutton", padding=(18, 7), background=CARD, font=(FONT, 10, "bold"))
+    style.configure("Seg.TRadiobutton", padding=(12, 2), background=CARD, font=(FONT, 9, "bold"))
     style.map("Seg.TRadiobutton", foreground=[("selected", "white")], background=[("active", CARD)])
     # Smaller pills for toolbars (their own, shorter images)
-    w2, h2 = 40, 28
+    w2, h2 = 36, 22
     r2 = h2 // 2 - 1
-    b2 = dict(border=(r2, r2), sticky="nsew")
+    b2 = dict(border=(r2, r2), padding=(r2 // 2 + 2, 0), sticky="nsew")
     style.element_create("RSegS.border", "image", img(w2, h2, r2, CARD, "#DED9D1"),
                          ("selected", img(w2, h2, r2, ORANGE)), ("active", img(w2, h2, r2, "#FFF7EF", "#FFB27A")),
                          **b2)
     style.layout("SegSm.TRadiobutton", [("RSegS.border", {"sticky": "nsew", "children": [
         ("Radiobutton.padding", {"sticky": "nsew", "children": [("Radiobutton.label", {"sticky": "nsew"})]})]})])
-    style.configure("SegSm.TRadiobutton", padding=(12, 2), background=CARD, font=(FONT, 9, "bold"))
+    style.configure("SegSm.TRadiobutton", padding=(10, 1), background=CARD, font=(FONT, 9, "bold"))
     style.map("SegSm.TRadiobutton", foreground=[("selected", "white")], background=[("active", CARD)])
     style.element_create("RButtonS.border", "image", img(w2, h2, r2, CARD, "#DED9D1"),
                          ("disabled", img(w2, h2, r2, "#F7F6F4", "#EEEBE6")),
@@ -600,7 +600,7 @@ def style_rounded(style, root):
                          ("active", img(w2, h2, r2, "#FFF7EF", "#FFB27A")), **b2)
     style.layout("Small.TButton", [("RButtonS.border", {"sticky": "nsew", "children": [
         ("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})])
-    style.configure("Small.TButton", padding=(12, 2), background=CARD, foreground=INK, font=(FONT, 9), width=-4)
+    style.configure("Small.TButton", padding=(10, 1), background=CARD, foreground=INK, font=(FONT, 9), width=-4)
     style.map("Small.TButton", background=corners, foreground=[("disabled", "#A0A4AB")])
 
     # Checkboxes: rounded squares with a tick

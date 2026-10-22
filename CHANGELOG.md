@@ -1,5 +1,10 @@
 # GOLD Express - what's new
 
+## 2.2.1
+- **Smaller, lighter buttons**, fields and selectors everywhere.
+- **Compact cards** on the Overview and My Orders: about half the height, so the tables and details
+  get more room.
+
 ## 2.2.0
 - New **My Orders** dashboard (first page in the menu): every order GOLD lists under "My orders
   only", read from all result pages as soon as GOLD Express is connected.
