@@ -1,5 +1,15 @@
 # GOLD Express - what's new
 
+## 2.2.0
+- New **My Orders** dashboard (first page in the menu): every order GOLD lists under "My orders
+  only", read from all result pages as soon as GOLD Express is connected.
+  - Colourful counters: My orders, In progress, Due in 30 days, Past target date, Customers.
+  - Orders by status (ring chart) and orders per customer (bars).
+  - The orders: customer name, customer site ref, order status and target date; search, Open /
+    Closed / All, late orders in red. Click a counter, a status or a customer to filter.
+  - Double-click an order to open it in the Order explorer; right-click for Overview, Ask GOLD or
+    copy; export to Excel (with service, site, BAN and more).
+
 ## 2.1.0
 - **Softer, rounder design.** Every page is now made of separate rounded tiles with a soft shadow.
 - Pill-shaped buttons, rounded fields and drop-downs, rounded selectors and checkboxes, and slim

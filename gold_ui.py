@@ -35,7 +35,15 @@ PALETTES = {
     "lavender": ("#F1F0FF", "#FDEBCD", "#D9D4FF", "#4F46C8"),
     "sky":      ("#EEF6FF", "#D7E8FF", "#A9CBFF", "#1F5FBF"),
     "grey":     ("#F7F6F4", "#ECEBE8", "#DDDBD6", "#5F6670"),
+    # vivid cards (white text, wave lines), for dashboards
+    "v_blue":   ("#55BDF7", "#1F86E0", "#8FD6FF", "#FFFFFF"),
+    "v_green":  ("#A3D550", "#56A72C", "#C8EC8E", "#FFFFFF"),
+    "v_orange": ("#FFB552", "#FF7A00", "#FFD594", "#FFFFFF"),
+    "v_purple": ("#BE6EDC", "#8A3FB8", "#DDA8F2", "#FFFFFF"),
+    "v_teal":   ("#33C7B3", "#128577", "#86E6D8", "#FFFFFF"),
+    "v_rose":   ("#FF7E8A", "#DD3F58", "#FFB8BF", "#FFFFFF"),
 }
+VIVID = {k for k in PALETTES if k.startswith("v_")}
 RAG_PALETTE = {"Green": "mint", "Amber": "amber", "Red": "rose", "No date": "grey", None: "grey"}
 
 
@@ -79,6 +87,16 @@ def gradient_card_image(w, h, r, palette):
     ImageDraw.Draw(blob).ellipse((sw * 0.55, sh * 0.35, sw * 1.25, sh * 1.45), fill=170)
     blob = blob.filter(ImageFilter.GaussianBlur(max(sw, sh) * 0.12))
     base = Image.composite(Image.new("RGB", (sw, sh), glow), base, blob).resize((w, h), Image.BICUBIC)
+    if palette in VIVID:  # two soft wave lines across the lower half, like a sparkline
+        import math
+        s = 3
+        waves = Image.new("RGBA", (w * s, h * s), (0, 0, 0, 0))
+        d = ImageDraw.Draw(waves)
+        for k, (amp, phase, alpha) in enumerate(((0.10, 0.0, 90), (0.07, 1.9, 60))):
+            pts = [(x * s, (h * (0.72 + 0.06 * k) + h * amp * math.sin(x / w * 2 * math.pi * 1.15 + phase)) * s)
+                   for x in range(0, w + 4, 4)]
+            d.line(pts, fill=(255, 255, 255, alpha), width=2 * s, joint="curve")
+        base = Image.alpha_composite(base.convert("RGBA"), waves.resize((w, h), Image.LANCZOS))
     mask = rounded_image(w, h, r, (255, 255, 255, 255)).split()[-1]
     out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     out.paste(base, (0, 0), mask)
@@ -202,6 +220,8 @@ class StatCard(tk.Canvas, _Redraw):
             self._img = ImageTk.PhotoImage(gradient_card_image(w, h, 18, self.palette))
             self._key = key
         accent = PALETTES[self.palette][3]
+        vivid = self.palette in VIVID
+        ink, sub_ink = ("#FFFFFF", "#FFFFFF") if vivid else (INK, "#4B5159")
         p = self.PAD
         self.delete("all")
         self.create_image(0, 0, image=self._img, anchor="nw")
@@ -214,16 +234,113 @@ class StatCard(tk.Canvas, _Redraw):
         while size > 11 and big.measure(self.big) > w - 2 * p - 4:
             size -= 1
             big = tkfont.Font(family="Segoe UI Light", size=size)
-        self.create_text(p, y, text=self.big, anchor="nw", fill=INK, font=big)
+        self.create_text(p, y, text=self.big, anchor="nw", fill=ink,
+                         font=tkfont.Font(family="Segoe UI Semibold" if vivid else "Segoe UI Light", size=size))
         y += tkfont.Font(family="Segoe UI Light", size=self.big_size).metrics("linespace") + 4
         self.create_text(p + 2, y, text=fit_text(self.sub, self.f_sub, w - 2 * p - 4, self.sub_lines),
-                         anchor="nw", fill="#4B5159", font=self.f_sub)
+                         anchor="nw", fill=sub_ink, font=self.f_sub)
         if self.icon:
             d = self.f_cap.metrics("linespace") + 14
-            if self._bubble is None or self._bubble.width() != d:
-                self._bubble = ImageTk.PhotoImage(rounded_image(d, d, d // 2, (255, 255, 255, 210)))
+            if self._bubble is None or self._bubble.width() != d or getattr(self, "_bubble_vivid", None) != vivid:
+                self._bubble = ImageTk.PhotoImage(rounded_image(d, d, d // 2, (255, 255, 255, 70 if vivid else 210)))
+                self._bubble_vivid = vivid
             self.create_image(w - p + 6, p - 6, image=self._bubble, anchor="ne")
             self.create_text(w - p + 6 - d // 2, p - 6 + d // 2, text=self.icon, fill=accent, font=(ICONS, 10))
+
+
+class Donut(tk.Canvas, _Redraw):
+    """A ring chart: set(items=[(label, value, colour)], centre_big, centre_small)."""
+
+    def __init__(self, parent, size=None, bg=CARD, thickness=0.2, on_click=None):
+        self.f_big = tkfont.Font(family="Segoe UI Semibold", size=15)
+        self.f_small = tkfont.Font(family=FONT, size=7)
+        size = size or int(self.f_big.metrics("linespace") * 3.9)  # room for the centre text at any scaling
+        super().__init__(parent, width=size, height=size, background=bg, highlightthickness=0, borderwidth=0)
+        self.items, self.big, self.small, self.thickness = [], "", "", thickness
+        self._img = None
+        self._watch()
+
+    def set(self, items, big="", small=""):
+        self.items, self.big, self.small = [i for i in items if i[1] > 0], big, small
+        if self._size:
+            self.redraw(*self._size)
+
+    def redraw(self, w, h):
+        d = min(w, h) - 4
+        s = 4
+        im = Image.new("RGBA", (d * s, d * s), (0, 0, 0, 0))
+        dr = ImageDraw.Draw(im)
+        total = sum(v for _, v, _ in self.items)
+        if not total:
+            dr.ellipse((0, 0, d * s - 1, d * s - 1), fill="#EFECE7")
+        else:
+            start = -90.0
+            gap = 1.2 if len(self.items) > 1 else 0
+            for _, v, colour in self.items:
+                sweep = 360.0 * v / total
+                dr.pieslice((0, 0, d * s - 1, d * s - 1), start + gap / 2, start + sweep - gap / 2, fill=colour)
+                start += sweep
+        hole = d * s * self.thickness
+        dr.ellipse((hole, hole, d * s - hole, d * s - hole), fill=(0, 0, 0, 0))
+        # punch the hole (pieslice painted it): rebuild alpha from a mask
+        mask = Image.new("L", im.size, 255)
+        ImageDraw.Draw(mask).ellipse((hole, hole, d * s - hole, d * s - hole), fill=0)
+        im.putalpha(Image.composite(im.split()[-1], Image.new("L", im.size, 0), mask))
+        self._img = ImageTk.PhotoImage(im.resize((d, d), Image.LANCZOS))
+        self.delete("all")
+        self.create_image(w // 2, h // 2, image=self._img)
+        hb, hs = self.f_big.metrics("linespace"), self.f_small.metrics("linespace")
+        top = h // 2 - (hb + hs) // 2
+        self.create_text(w // 2, top, text=self.big, fill=INK, font=self.f_big, anchor="n")
+        self.create_text(w // 2, top + hb - 2, text=self.small, fill=MUTED, font=self.f_small, anchor="n")
+
+
+class Bars(tk.Canvas, _Redraw):
+    """Horizontal bars with labels and values: set([(label, value, colour)]). click(label) when clicked."""
+
+    def __init__(self, parent, bg=CARD, on_click=None, rows=6):
+        self.f_label = tkfont.Font(family=FONT, size=9)
+        self.f_value = tkfont.Font(family=FONT, size=9, weight="bold")
+        self.row_h = self.f_label.metrics("linespace") + 16
+        super().__init__(parent, height=self.row_h * rows, background=bg, highlightthickness=0, borderwidth=0)
+        self.items, self.on_click, self._imgs = [], on_click, []
+        self._watch()
+        if on_click:
+            self.bind("<Button-1>", self._clicked)
+
+    def set(self, items):
+        self.items = list(items)
+        if self._size:
+            self.redraw(*self._size)
+
+    def _clicked(self, e):
+        i = e.y // self.row_h
+        if 0 <= i < len(self.items) and self.on_click:
+            self.on_click(self.items[i][0])
+
+    def redraw(self, w, h):
+        self.delete("all")
+        self._imgs = []
+        if not self.items:
+            return
+        top = max(v for _, v, _ in self.items) or 1
+        label_w = min(int(w * 0.5), max(self.f_label.measure(l) for l, _, _ in self.items) + 12)
+        bar_w = w - label_w - 40
+        bh = max(8, self.row_h - 18)
+        for i, (label, value, colour) in enumerate(self.items):
+            y = i * self.row_h + self.row_h // 2
+            self.create_text(0, y, text=fit_text(label, self.f_label, label_w - 8, 1), anchor="w", fill=INK,
+                             font=self.f_label)
+            track = ImageTk.PhotoImage(rounded_image(bar_w, bh, bh // 2, "#F1EEE9"))
+            self._imgs.append(track)
+            self.create_image(label_w, y, image=track, anchor="w")
+            bw = max(bh, int(bar_w * value / top))
+            bar = ImageTk.PhotoImage(rounded_image(bw, bh, bh // 2, colour))
+            self._imgs.append(bar)
+            self.create_image(label_w, y, image=bar, anchor="w")
+            self.create_text(label_w + bar_w + 8, y, text=str(value), anchor="w", fill=INK, font=self.f_value)
+        if self.on_click:
+            self.configure(cursor="hand2")
 
 
 class Pill(tk.Canvas):
@@ -466,6 +583,25 @@ def style_rounded(style, root):
         ("Radiobutton.padding", {"sticky": "nsew", "children": [("Radiobutton.label", {"sticky": "nsew"})]})]})])
     style.configure("Seg.TRadiobutton", padding=(18, 7), background=CARD, font=(FONT, 10, "bold"))
     style.map("Seg.TRadiobutton", foreground=[("selected", "white")], background=[("active", CARD)])
+    # Smaller pills for toolbars (their own, shorter images)
+    w2, h2 = 40, 28
+    r2 = h2 // 2 - 1
+    b2 = dict(border=(r2, r2), sticky="nsew")
+    style.element_create("RSegS.border", "image", img(w2, h2, r2, CARD, "#DED9D1"),
+                         ("selected", img(w2, h2, r2, ORANGE)), ("active", img(w2, h2, r2, "#FFF7EF", "#FFB27A")),
+                         **b2)
+    style.layout("SegSm.TRadiobutton", [("RSegS.border", {"sticky": "nsew", "children": [
+        ("Radiobutton.padding", {"sticky": "nsew", "children": [("Radiobutton.label", {"sticky": "nsew"})]})]})])
+    style.configure("SegSm.TRadiobutton", padding=(12, 2), background=CARD, font=(FONT, 9, "bold"))
+    style.map("SegSm.TRadiobutton", foreground=[("selected", "white")], background=[("active", CARD)])
+    style.element_create("RButtonS.border", "image", img(w2, h2, r2, CARD, "#DED9D1"),
+                         ("disabled", img(w2, h2, r2, "#F7F6F4", "#EEEBE6")),
+                         ("pressed", img(w2, h2, r2, "#FFEBD8", ORANGE)),
+                         ("active", img(w2, h2, r2, "#FFF7EF", "#FFB27A")), **b2)
+    style.layout("Small.TButton", [("RButtonS.border", {"sticky": "nsew", "children": [
+        ("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})])
+    style.configure("Small.TButton", padding=(12, 2), background=CARD, foreground=INK, font=(FONT, 9), width=-4)
+    style.map("Small.TButton", background=corners, foreground=[("disabled", "#A0A4AB")])
 
     # Checkboxes: rounded squares with a tick
     def check(on):

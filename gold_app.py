@@ -28,6 +28,7 @@ import gold_ai as gai
 import gold_extract as gx
 import gold_markdown as gmd
 import gold_milestones as gm
+import gold_myorders as gmo
 import gold_names as gn
 import gold_orgchart as goc
 import gold_overview as go
@@ -340,7 +341,8 @@ class App(tk.Tk):
             except Exception:
                 pass
             return True
-        self.worker.submit("Connecting to GOLD", warm, lambda _: self.log("Connected to GOLD - ready."))
+        self.worker.submit("Connecting to GOLD", warm, lambda _: (self.log("Connected to GOLD - ready."),
+                                                                  self._my_page_shown()))  # fill My Orders
 
     # ----- thread-safe UI helpers
     def ui(self, fn):
@@ -688,11 +690,13 @@ class App(tk.Tk):
         def page(pad=True):
             return tk.Frame(content_host, background=BG)
 
-        overview, explorer, ask = page(), page(), page(False)
+        my, overview, explorer, ask = page(), page(), page(), page(False)
         rtdd, assign = page(), page()
         org, names = page(False), page()
-        self.org_frame = org
+        self.org_frame, self.explorer_frame, self.overview_frame = org, explorer, overview
+        self.my_frame = my
         nav.section("Orders")
+        nav.add(my, "My Orders", "", "Your orders in GOLD (My orders only) at a glance")
         nav.add(overview, "Overview", "", "Key facts and delivery status of your orders")
         nav.add(explorer, "Order explorer", "", "Open an order, browse its tabs, export and download")
         nav.add(ask, "Ask GOLD", "", "AI assistant - ask about deadlines, pricing, sites and people")
@@ -711,6 +715,7 @@ class App(tk.Tk):
         tk.Label(nav.bottom, text=f"Version {__version__}  ·  © {AUTHOR}", bg=CARD, fg=FAINT,
                  font=(FONT, 8), anchor="w").pack(fill="x", padx=12, pady=(10, 0))
         self.bulk_stop_flag = threading.Event()
+        self._build_my_tab(my)
         self._build_overview_tab(overview)
         self._build_explorer(explorer)
         self._build_rtdd_tab(rtdd)
@@ -881,6 +886,289 @@ class App(tk.Tk):
         y = self.winfo_rooty() + 80
         win.geometry(f"+{x}+{y}")
         win.grab_set()
+
+    # ----- My Orders tab (dashboard of the orders GOLD lists under "My orders only")
+    STATUS_COLOURS = {"Creation": "#9AA5B1", "Pricing": "#A78BFA", "Approval": "#F59E0B", "Release": "#38BDF8",
+                      "Manage": "#22C55E", "Acceptance": "#14B8A6", "Billing": "#3B82F6",
+                      "Awaiting Close": "#FB923C", "On-Hold": "#EF4444", "Closed": "#94A3B8"}
+    CUSTOMER_COLOURS = ("#1F86E0", "#56A72C", "#FF7A00", "#8A3FB8", "#128577", "#DD3F58")
+    MY_COLUMNS = (("order", "Order", 95), ("customer", "Customer name", 170), ("cust_site_ref", "Cust. site ref", 120),
+                  ("status", "Order status", 105), ("target", "Target date", 95), ("service", "Service", 200),
+                  ("type", "Type", 90), ("orange_site_ref", "Orange site ref", 240))
+    MY_SHOWN = ("order", "customer", "cust_site_ref", "status", "target")  # the rest is in the Excel export
+    MY_CACHE_MIN = 10
+
+    def _build_my_tab(self, f):
+        self.my_frame = f
+        self.my_orders, self.my_time = [], None
+        self.my_filter = {"scope": "open", "status": None, "customer": None, "when": None}
+
+        # Colourful counters
+        kpi = tk.Frame(f, background=BG)
+        kpi.pack(fill="x", padx=6, pady=(2, 8))
+        self.my_cards = {}
+        for col, (key, caption, icon, palette, action) in enumerate((
+                ("total", "My orders", "", "v_blue", lambda: self._my_set_filter(scope="all")),
+                ("open", "In progress", "", "v_green", lambda: self._my_set_filter(scope="open")),
+                ("due", "Due in 30 days", "", "v_orange", lambda: self._my_set_filter(when="due30")),
+                ("late", "Past target date", "", "v_rose", lambda: self._my_set_filter(when="late")),
+                ("customers", "Customers", "", "v_purple", lambda: self._my_set_filter(scope="all")))):
+            card = gui.StatCard(kpi, caption, icon, palette, sub_lines=1, big_size=19, command=action)
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
+            kpi.columnconfigure(col, weight=1, uniform="mykpi")
+            self.my_cards[key] = card
+
+        # Below the counters: the orders (left, large) and a column of charts (right)
+        lower = tk.Frame(f, background=BG)
+        lower.pack(fill="both", expand=True)
+        scale = self.winfo_fpixels("1i") / 96  # sizes below are for 100% screen scaling
+        side = tk.Frame(lower, background=BG)
+        side.grid(row=0, column=1, sticky="nsew")
+        lower.rowconfigure(0, weight=1)
+        lower.columnconfigure(0, weight=3, uniform="mylower")  # the orders get 3/5 of the width
+        lower.columnconfigure(1, weight=2, uniform="mylower")
+
+        def head(parent, title, icon):
+            h = tk.Frame(parent, background=CARD)
+            h.pack(fill="x", pady=(0, 6))
+            tk.Label(h, text=icon, bg=CARD, fg=ORANGE, font=(gui.ICONS, 11)).pack(side="left", padx=(0, 8))
+            tk.Label(h, text=title, bg=CARD, fg=INK, font=(FONT, 11, "bold")).pack(side="left")
+            return h
+
+        t1 = self._tile(side, fill="x")
+        head(t1.body, "Orders by status", "")
+        row = tk.Frame(t1.body, background=CARD)
+        row.pack(fill="x")
+        self.my_donut = gui.Donut(row)
+        self.my_donut.pack(side="left", padx=(0, 14))
+        self.my_legend = tk.Frame(row, background=CARD)
+        self.my_legend.pack(side="left", fill="x", expand=True)
+
+        t2 = self._tile(side, fill="both", expand=True)
+        head(t2.body, "Orders per customer", "")
+        self.my_bars = gui.Bars(t2.body, rows=5, on_click=lambda name: self._my_set_filter(customer=name))
+        self.my_bars.pack(fill="x")
+
+        # The orders
+        tt = self._tile(lower)
+        tt.grid(row=0, column=0, sticky="nsew")
+        title = tk.Frame(tt.body, background=CARD)
+        title.pack(fill="x", pady=(0, 6))
+        tk.Label(title, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 11)).pack(side="left", padx=(0, 8))
+        tk.Label(title, text="Orders", bg=CARD, fg=INK, font=(FONT, 11, "bold")).pack(side="left")
+        ttk.Button(title, text="⤓  Excel", style="Small.TButton", command=self._my_export).pack(side="right")
+        self._btn(title, "↻  Refresh", lambda: self._my_load(refresh=True), "Small.TButton").pack(side="right",
+                                                                                                padx=6)
+        self.my_info = tk.Label(title, text="", bg=CARD, fg=MUTED, font=(FONT, 9))
+        self.my_info.pack(side="right", padx=6)
+        bar = tk.Frame(tt.body, background=CARD)
+        bar.pack(fill="x", pady=(0, 8))
+        tk.Label(bar, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 12)).pack(side="left", padx=(2, 6))
+        self.my_search = tk.StringVar()
+        ent = ttk.Entry(bar, textvariable=self.my_search, width=16)
+        ent.pack(side="left")
+        ent.bind("<KeyRelease>", lambda e: self._my_fill())
+        self.my_scope = tk.StringVar(value="open")
+        seg = tk.Frame(bar, background=CARD)
+        seg.pack(side="left", padx=10)
+        for value, label in (("open", "Open"), ("closed", "Closed"), ("all", "All")):
+            ttk.Radiobutton(seg, text=label, value=value, variable=self.my_scope, style="SegSm.TRadiobutton",
+                            command=lambda: self._my_set_filter(scope=self.my_scope.get())).pack(side="left",
+                                                                                                padx=(0, 4))
+        self.my_chip = gui.Pill(bar, "", ORANGE_DARK, ORANGE_SOFT, bg=CARD,
+                                command=lambda: self._my_set_filter(status=None, customer=None, when=None))
+
+        tf = tk.Frame(tt.body, background=CARD)
+        tf.pack(fill="both", expand=True)
+        self.my_tree = ttk.Treeview(tf, columns=[c for c, _, _ in self.MY_COLUMNS], show="headings",
+                                    selectmode="browse")
+        for c, t, w in self.MY_COLUMNS:
+            self.my_tree.heading(c, text=t, anchor="w", command=lambda c=c: self._my_sort(c))
+            self.my_tree.column(c, width=int(w * scale), minwidth=int(70 * scale), anchor="w",
+                                stretch=True)  # share the tile's width
+        self.my_tree.configure(displaycolumns=self.MY_SHOWN)
+        self.my_tree.tag_configure("Closed", foreground=MUTED)
+        self.my_tree.tag_configure("late", foreground=RED)
+        self.my_tree.tag_configure("odd", background="#FAF9F7")
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.my_tree.yview)
+        self.my_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.my_tree.pack(side="left", fill="both", expand=True)
+        self.my_tree.bind("<Double-1>", lambda e: self._my_open())
+        self.my_tree.bind("<Return>", lambda e: self._my_open())
+        self.my_tree.bind("<Button-3>", self._my_menu)
+        self.my_sort_key = ("target", False)
+        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._my_page_shown(), add="+")
+        self._my_render()
+
+    # --- loading
+    def _my_page_shown(self):
+        if self.notebook.current() is not self.my_frame or self.busy:
+            return
+        if not self.my_time or time.time() - self.my_time > self.MY_CACHE_MIN * 60:
+            self._my_load()
+
+    def _my_load(self, refresh=False):
+        if self.busy:
+            return
+        w = self.worker
+
+        def job():
+            w.ensure_browser()
+            self.log("Reading your orders from GOLD (My orders only)...")
+            return gmo.read_my_orders(w.driver, w.wait, self.log)
+
+        def done(orders):
+            self.my_orders, self.my_time = orders, time.time()
+            self.log(f"My orders: {len(orders)} order(s) read from GOLD")
+            self._my_render()
+
+        self.my_info.configure(text="Reading GOLD...")
+        w.submit("Reading my orders", job, done, retry=True)
+
+    # --- drawing
+    def _my_render(self):
+        s = gmo.summary(self.my_orders)
+        loaded = self.my_time is not None
+        n = lambda v: str(v) if loaded else "-"
+        self.my_cards["total"].set(n(s["total"]), "in My orders" if loaded else "reading GOLD...")
+        self.my_cards["open"].set(n(s["open"]), f"{s['closed']} closed" if loaded else "")
+        self.my_cards["due"].set(n(s["due_30"]), "target in 30 days" if loaded else "")
+        self.my_cards["late"].set(n(s["late"]), "still open" if loaded else "")
+        self.my_cards["customers"].set(n(s["customers"]), (s["by_customer"][0][0] if s["by_customer"] else "")
+                                       if loaded else "")
+        # donut + legend
+        items = [(k, v, self.STATUS_COLOURS.get(k, "#B0B7C0")) for k, v in s["by_status"]]
+        self.my_donut.set(items, n(s["total"]), "orders")
+        for w in self.my_legend.winfo_children():
+            w.destroy()
+        for k, v, colour in items:
+            r = tk.Frame(self.my_legend, background=CARD, cursor="hand2")
+            r.pack(fill="x", pady=1)
+            dot = tk.Label(r, text="●", bg=CARD, fg=colour, font=(FONT, 11))
+            dot.pack(side="left")
+            pct = f"{v * 100 // max(s['total'], 1)}%"
+            cnt = tk.Label(r, text=f"{v}  ·  {pct}", bg=CARD, fg=MUTED, font=(FONT, 9, "bold"))
+            cnt.pack(side="right")
+            name = tk.Label(r, text=k, bg=CARD, fg=INK, font=(FONT, 9), cursor="hand2", anchor="w")
+            name.pack(side="left", padx=(4, 10), fill="x", expand=True)
+            for wdg in (r, dot, name, cnt):
+                wdg.bind("<Button-1>", lambda e, k=k: self._my_set_filter(status=k, scope="all"))
+        # customers
+        top = s["by_customer"][:5]
+        self.my_bars.set([(name, v, self.CUSTOMER_COLOURS[i % len(self.CUSTOMER_COLOURS)])
+                          for i, (name, v) in enumerate(top)])
+        self._my_fill()
+
+    def _my_set_filter(self, **kw):
+        self.my_filter.update(kw)
+        if "scope" in kw:
+            self.my_scope.set(kw["scope"])
+        if kw.get("when"):
+            self.my_filter["scope"] = "open"
+            self.my_scope.set("open")
+        self._my_fill()
+
+    def _my_rows(self):
+        f, today = self.my_filter, datetime.now().date()
+        q = self.my_search.get().strip().lower()
+        out = []
+        for o in self.my_orders:
+            closed = o.get("status") == "Closed"
+            if (f["scope"] == "open" and closed) or (f["scope"] == "closed" and not closed):
+                continue
+            if f["status"] and o.get("status") != f["status"]:
+                continue
+            if f["customer"] and o.get("customer") != f["customer"]:
+                continue
+            d = o.get("ittd_date")
+            if f["when"] == "late" and not (d and d < today):
+                continue
+            if f["when"] == "due30" and not (d and 0 <= (d - today).days <= 30):
+                continue
+            if q and q not in " ".join(str(v) for v in o.values()).lower():
+                continue
+            out.append(o)
+        key, rev = self.my_sort_key
+        sort_val = (lambda o: o.get("ittd_date") or datetime.max.date()) if key == "target" else \
+            (lambda o: str(o.get(key, "")).lower())
+        return sorted(out, key=sort_val, reverse=rev)
+
+    def _my_fill(self):
+        rows = self._my_rows()
+        today = datetime.now().date()
+        self.my_tree.delete(*self.my_tree.get_children())
+        for i, o in enumerate(rows):
+            d = o.get("ittd_date")
+            late = d and d < today and o.get("status") != "Closed"
+            tags = [o.get("status", "")] + (["late"] if late else []) + (["odd"] if i % 2 else [])
+            self.my_tree.insert("", "end", iid=o["order"], tags=tags, values=(
+                o["order"], o.get("customer", ""), o.get("cust_site_ref", ""), "●  " + o.get("status", ""),
+                f"{d:%d-%b-%Y}" if d else "", o.get("service", ""), o.get("type", ""), o.get("orange_site_ref", "")))
+        f = self.my_filter
+        parts = [p for p in (f["status"] and f"Status: {f['status']}", f["customer"] and f"Customer: {f['customer']}",
+                             {"late": "Past target date", "due30": "Due in 30 days"}.get(f["when"])) if p]
+        if parts:
+            self.my_chip.set("  ·  ".join(parts) + "   ✕")
+            self.my_chip.pack(side="left", padx=(4, 0))
+        else:
+            self.my_chip.pack_forget()
+        when = datetime.fromtimestamp(self.my_time).strftime("%H:%M") if self.my_time else ""
+        self.my_info.configure(text=f"{len(rows)} of {len(self.my_orders)}" + (f"  ·  {when}" if when else ""))
+
+    def _my_sort(self, col):
+        key, rev = self.my_sort_key
+        self.my_sort_key = (col, not rev if key == col else False)
+        self._my_fill()
+
+    # --- actions
+    def _my_selected(self):
+        sel = self.my_tree.selection()
+        return sel[0] if sel else None
+
+    def _my_open(self, order=None):
+        order = order or self._my_selected()
+        if not order or self.busy:
+            return
+        self.notebook.select(self.explorer_frame)
+        self.order_var.set(order)
+        self.open_order()
+
+    def _my_menu(self, e):
+        iid = self.my_tree.identify_row(e.y)
+        if not iid:
+            return
+        self.my_tree.selection_set(iid)
+        m = tk.Menu(self, tearoff=0)
+        m.add_command(label="Open in Order explorer", command=lambda: self._my_open(iid))
+        m.add_command(label="Show in Overview", command=lambda: (self.notebook.select(self.overview_frame),
+                                                                 self.ov_input.set(iid), self._ov_run()))
+        m.add_command(label="Ask GOLD about it", command=lambda: (self.notebook.select(self.ask_frame),
+                                                                  self.order_var.set(iid), self._ask_tab_shown()))
+        m.add_separator()
+        m.add_command(label="Copy order number", command=lambda: (self.clipboard_clear(), self.clipboard_append(iid)))
+        m.tk_popup(e.x_root, e.y_root)
+
+    def _my_export(self):
+        rows = self._my_rows()
+        if not rows:
+            return
+        path = Path(self._ctx()["workbook"]).parent / f"My_orders_{datetime.now():%Y-%m-%d_%H%M}.xlsx"
+        cols = [("Order", "order"), ("Customer", "customer"), ("Cust. Site Ref", "cust_site_ref"),
+                ("Order Status", "status"), ("Service", "service"), ("Target date (iTTD)", "ittd_date"),
+                ("Order Type", "type"), ("Orange Site Ref", "orange_site_ref"), ("Site Id", "site_id"),
+                ("BAN", "ban"), ("Sales Country", "sales_country"), ("Installed Offer Id", "installed_offer")]
+        try:
+            gx.write_sheet(path, "My orders", [f"Exported {datetime.now():%d-%b-%Y %H:%M}  ·  {len(rows)} orders"],
+                           [("My orders", [c for c, _ in cols],
+                             [[(o.get(k).strftime("%d-%b-%Y") if k == "ittd_date" and o.get(k) else o.get(k, ""))
+                               for _, k in cols] for o in rows])])
+        except PermissionError:
+            messagebox.showerror(APP_NAME, f"{path.name} is open in Excel. Close it and try again.")
+            return
+        self.log(f"My orders exported: {path}")
+        if messagebox.askyesno(APP_NAME, f"Saved to\n{path}\n\nOpen it now?"):
+            os.startfile(path)
 
     # ----- Overview tab
     RAG_UI = {"Red": ("#C62828", "#FDE7E7"), "Amber": ("#A15C00", "#FFF3D6"),

@@ -9,6 +9,7 @@ a hidden Firefox window, so routine order work takes a few clicks instead of man
 
 | Tab | |
 |---|---|
+| **My Orders** | Dashboard of the orders GOLD lists under "My orders only": counters, status ring chart, orders per customer, and the list (customer, customer site ref, status, target date) with filters and Excel export. |
 | **Overview** | Key facts of one or more orders: order value, project, scope, STM, site, target dates, with Red / Amber / Green delivery and 120-day lead-time status. Exports a management-ready Excel. |
 | **Order explorer** | Open an order, browse its tabs, take screenshots, download documents, see teams, export tabs to Excel. |
 | **Revised Target Date** | Add the "Revised Target Date" milestone (Customer or Orange Business Services reason) to many orders at once. |
@@ -58,6 +59,8 @@ To release a new version: bump `__version__` in `version.py`, add a section to `
 | `gold_names.py` | DPM names list |
 | `gold_grid.py` | Excel-like editable table |
 | `gold_update.py` | Updates from GitHub Releases |
+| `gold_myorders.py` | My Orders: reads GOLD's "My orders only" list (all pages) |
+| `gold_ui.py` | Look and feel: side menu, rounded tiles, cards, charts, rounded controls |
 | `gold_orgchart.py` | Orange Business Org Chart lookups (shared with SALTO Buddy) |
 | `gold_ai.py`, `gold_markdown.py` | Ask GOLD: Claude conversation with read-only GOLD tools, answer rendering |
 | `installer/` | Inno Setup wizard |
