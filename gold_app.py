@@ -3067,6 +3067,7 @@ if __name__ == "__main__":
         # Open the window without GOLD, show every page, save a screenshot, close (for troubleshooting).
         App._prewarm = lambda self: None
         App._check_updates = lambda self, quiet=True: None
+        App._my_load = lambda self, refresh=False: None  # showing My Orders must not start GOLD here
         report = HERE / "ui_selftest_report.txt"
         try:
             app = App()
