@@ -11,11 +11,14 @@ HEADING = re.compile(r"^(#{1,4})\s+(.*?)\s*#*$")
 
 
 def setup(text, font="Segoe UI", ink="#1F2328", muted="#6B7280", accent="#FF7900", soft="#FFE8D6",
-          line="#E2E4E8", code_bg="#F3F4F6", indent=0, size=10):
+          line="#E2E4E8", code_bg=None, indent=0, size=10, card=None, zebra=None):
     """Create the tags render() uses (call once per Text widget). indent: left margin of the
-    whole answer in pixels (e.g. to line it up under the assistant's name)."""
+    whole answer in pixels (e.g. to line it up under the assistant's name). card / zebra / code_bg:
+    table and code colours (default: the app's theme)."""
+    import gold_ui as gui
+    code_bg = code_bg or gui.TRACK
     text.md = dict(font=font, ink=ink, muted=muted, accent=accent, soft=soft, line=line, code_bg=code_bg,
-                   indent=indent)
+                   indent=indent, card=card or gui.CARD, zebra=zebra or gui.ZEBRA)
     m = indent + 2
     text.tag_configure("p", font=(font, size), foreground=ink, spacing1=2, spacing3=5, lmargin1=m, lmargin2=m,
                        rmargin=24)
@@ -91,7 +94,7 @@ def _table(text, rows, width):
         for c in range(ncol):
             value = row[c] if c < len(row) else ""
             bold = r == 0 or (value.startswith("**") and value.endswith("**"))
-            bg = md["soft"] if r == 0 else ("#FFFFFF" if r % 2 else "#FAFAFB")
+            bg = md["soft"] if r == 0 else (md["card"] if r % 2 else md["zebra"])
             lab = tk.Label(outer, text=_plain(value), background=bg, foreground=md["ink"], anchor="nw",
                            justify="left", wraplength=widths[c], padx=8, pady=4,
                            font=(md["font"], 9, "bold" if bold else "normal"))

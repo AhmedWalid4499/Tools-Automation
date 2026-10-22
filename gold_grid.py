@@ -10,12 +10,14 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
+import gold_ui as gui
+
 ORDER_RE = re.compile(r"\s*\d{2}-\d+")
 
 
 class EditGrid(tk.Frame):
     def __init__(self, parent, columns, on_change=None, start_rows=15, **kw):
-        super().__init__(parent, background="white", highlightthickness=0, **kw)  # sits in a rounded tile
+        super().__init__(parent, background=gui.CARD, highlightthickness=0, **kw)  # sits in a rounded tile
         self.cols = columns
         self.keys = [c["key"] for c in columns]
         self.all_keys = ["n"] + self.keys + ["status"]
@@ -32,10 +34,10 @@ class EditGrid(tk.Frame):
                              stretch=c.get("stretch", False))
         self.tree.heading("status", text="Status", anchor="w")
         self.tree.column("status", width=360, anchor="w", stretch=True)
-        self.tree.tag_configure("odd", background="#FAFAFB")
-        self.tree.tag_configure("ok", foreground="#1E7B34")
-        self.tree.tag_configure("bad", foreground="#C62828")
-        self.tree.tag_configure("run", foreground="#FF7900")
+        self.tree.tag_configure("odd", background=gui.ZEBRA)
+        self.tree.tag_configure("ok", foreground=gui.GREEN_FG)
+        self.tree.tag_configure("bad", foreground=gui.RED_FG)
+        self.tree.tag_configure("run", foreground=gui.ORANGE_DARK)
         sb = ttk.Scrollbar(self, command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")

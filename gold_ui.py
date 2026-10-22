@@ -13,17 +13,47 @@ from PIL import Image, ImageDraw, ImageFilter, ImageTk
 FONT = "Segoe UI"
 ICONS = "Segoe Fluent Icons" if Path(r"C:\Windows\Fonts\SegoeIcons.ttf").exists() else "Segoe MDL2 Assets"
 
-# Warm, light palette
-BG = "#F3F1EC"        # window background (warm off-white)
-CARD = "#FFFFFF"
-INK = "#1F2328"
-MUTED = "#7D838C"
-FAINT = "#A7ACB3"
-LINE = "#EBE7E1"
-ORANGE = "#FF7900"
-ORANGE_DARK = "#E06A00"
-ORANGE_SOFT = "#FFF0E1"
-HOVER = "#F6F3EF"
+def _initial_theme():
+    """'light' or 'dark', as saved in the settings (Settings > Appearance). Read here, before anything is
+    drawn, because the colours below are used as defaults everywhere."""
+    import json
+    import os
+    if os.environ.get("GOLD_THEME"):  # for testing either look without changing the settings
+        return os.environ["GOLD_THEME"]
+    try:
+        from open_gold import HERE
+        return json.loads((HERE / "gold_app_settings.json").read_text(encoding="utf-8")).get("theme", "light")
+    except Exception:
+        return "light"
+
+
+THEMES = {
+    "light": dict(
+        BG="#F3F1EC", CARD="#FFFFFF", INK="#1F2328", MUTED="#7D838C", FAINT="#A7ACB3", LINE="#EBE7E1",
+        ORANGE="#FF7900", ORANGE_DARK="#E06A00", ORANGE_SOFT="#FFF0E1", HOVER="#F6F3EF",
+        FIELD="#FBFAF8", FIELD_LINE="#E3DED6", PLACEHOLDER="#9CA3AF", ACCENT_OFF="#F9CBA0",
+        SUB_INK="#4B5159", TRACK="#F0EDE8", ZEBRA="#FAF9F7", HEAD_BG="#FAF8F5", HEAD_ACTIVE="#F4F1EC",
+        BTN_LINE="#DED9D1", BTN_HOVER="#FFF7EF", BTN_HOVER_LINE="#FFB27A", BTN_PRESS="#FFEBD8",
+        DISABLED="#F7F6F4", DISABLED_LINE="#EEEBE6", DISABLED_INK="#A0A4AB", CHECK_LINE="#CFC9C0",
+        THUMB="#D8D3CB", THUMB_HOVER="#BDB6AC", THUMB_PRESS="#A9A196",
+        GREEN_FG="#1E7B34", GREEN_BG="#E4F4E8", AMBER_FG="#A15C00", AMBER_BG="#FFF3D6",
+        RED_FG="#C62828", RED_BG="#FDE7E7", GREY_FG="#595959", GREY_BG="#EFEFEF",
+    ),
+    "dark": dict(
+        BG="#141518", CARD="#1F2024", INK="#E8E9EB", MUTED="#A0A5AD", FAINT="#767B84", LINE="#2E3035",
+        ORANGE="#FF7900", ORANGE_DARK="#FF9640", ORANGE_SOFT="#3B2716", HOVER="#292A2F",
+        FIELD="#18191C", FIELD_LINE="#3A3C42", PLACEHOLDER="#6E737B", ACCENT_OFF="#7A4A22",
+        SUB_INK="#C9CCD1", TRACK="#2C2E33", ZEBRA="#232428", HEAD_BG="#26272B", HEAD_ACTIVE="#2E3035",
+        BTN_LINE="#3A3C42", BTN_HOVER="#2E2420", BTN_HOVER_LINE="#B8611E", BTN_PRESS="#3B2716",
+        DISABLED="#232428", DISABLED_LINE="#2C2E33", DISABLED_INK="#5F646C", CHECK_LINE="#55585F",
+        THUMB="#3A3C42", THUMB_HOVER="#4A4D54", THUMB_PRESS="#5A5D64",
+        GREEN_FG="#7FD99A", GREEN_BG="#1C3324", AMBER_FG="#F2B861", AMBER_BG="#3A2E16",
+        RED_FG="#FF8A8A", RED_BG="#3D1E21", GREY_FG="#A0A5AD", GREY_BG="#2A2B2F",
+    ),
+}
+THEME = _initial_theme() if _initial_theme() in THEMES else "light"
+globals().update(THEMES[THEME])
+DARK = THEME == "dark"
 
 # Gradient card palettes: (top-left colour, bottom-right colour, glow colour, accent / text colour)
 PALETTES = {
@@ -35,14 +65,25 @@ PALETTES = {
     "lavender": ("#F1F0FF", "#FDEBCD", "#D9D4FF", "#4F46C8"),
     "sky":      ("#EEF6FF", "#D7E8FF", "#A9CBFF", "#1F5FBF"),
     "grey":     ("#F7F6F4", "#ECEBE8", "#DDDBD6", "#5F6670"),
-    # vivid cards (white text, wave lines), for dashboards
+} if not DARK else {
+    "sun":      ("#2A2418", "#3A2E17", "#6A4C14", "#FFC266"),
+    "peach":    ("#2B2119", "#3B2A1C", "#6E4220", "#FFA866"),
+    "mint":     ("#18261E", "#1E3326", "#2E6B45", "#7FD99A"),
+    "amber":    ("#2A2516", "#3A3116", "#6E5A16", "#F2C461"),
+    "rose":     ("#2B1C1E", "#3B2226", "#73323A", "#FF8A8A"),
+    "lavender": ("#1F1E2E", "#2E2A26", "#4A4480", "#B7B0FF"),
+    "sky":      ("#18212E", "#1C2B3E", "#2D4F80", "#8FC0FF"),
+    "grey":     ("#222327", "#2A2B30", "#3A3C42", "#B0B5BD"),
+}
+PALETTES.update({
+    # vivid cards (white text, wave lines), for dashboards - the same in both themes
     "v_blue":   ("#55BDF7", "#1F86E0", "#8FD6FF", "#FFFFFF"),
     "v_green":  ("#A3D550", "#56A72C", "#C8EC8E", "#FFFFFF"),
     "v_orange": ("#FFB552", "#FF7A00", "#FFD594", "#FFFFFF"),
     "v_purple": ("#BE6EDC", "#8A3FB8", "#DDA8F2", "#FFFFFF"),
     "v_teal":   ("#33C7B3", "#128577", "#86E6D8", "#FFFFFF"),
     "v_rose":   ("#FF7E8A", "#DD3F58", "#FFB8BF", "#FFFFFF"),
-}
+})
 VIVID = {k for k in PALETTES if k.startswith("v_")}
 RAG_PALETTE = {"Green": "mint", "Amber": "amber", "Red": "rose", "No date": "grey", None: "grey"}
 
@@ -66,7 +107,7 @@ def tile_image(w, h, r, fill=CARD, shadow=True, outline=None, m=6):
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     if shadow:
         sh = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(sh).rounded_rectangle((m, m + 3, w - m, h - m + 2), radius=r, fill=(70, 50, 20, 26))
+        ImageDraw.Draw(sh).rounded_rectangle((m, m + 3, w - m, h - m + 2), radius=r, fill=(0, 0, 0, 90) if DARK else (70, 50, 20, 26))
         img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(5)))
     card = rounded_image(w - 2 * m, h - 2 * m, r, fill, outline)
     img.alpha_composite(card, (m, m))
@@ -221,7 +262,7 @@ class StatCard(tk.Canvas, _Redraw):
             self._key = key
         accent = PALETTES[self.palette][3]
         vivid = self.palette in VIVID
-        ink, sub_ink = ("#FFFFFF", "#FFFFFF") if vivid else (INK, "#4B5159")
+        ink, sub_ink = ("#FFFFFF", "#FFFFFF") if vivid else (INK, SUB_INK)
         p = self.PAD
         self.delete("all")
         self.create_image(0, 0, image=self._img, anchor="nw")
@@ -242,7 +283,7 @@ class StatCard(tk.Canvas, _Redraw):
         if self.icon:
             d = self.f_cap.metrics("linespace") + 10
             if self._bubble is None or self._bubble.width() != d or getattr(self, "_bubble_vivid", None) != vivid:
-                self._bubble = ImageTk.PhotoImage(rounded_image(d, d, d // 2, (255, 255, 255, 70 if vivid else 210)))
+                self._bubble = ImageTk.PhotoImage(rounded_image(d, d, d // 2, (255, 255, 255, 70 if vivid else 30 if DARK else 210)))
                 self._bubble_vivid = vivid
             self.create_image(w - p + 4, p - 4, image=self._bubble, anchor="ne")
             self.create_text(w - p + 4 - d // 2, p - 4 + d // 2, text=self.icon, fill=accent, font=(ICONS, 8))
@@ -272,7 +313,7 @@ class Donut(tk.Canvas, _Redraw):
         dr = ImageDraw.Draw(im)
         total = sum(v for _, v, _ in self.items)
         if not total:
-            dr.ellipse((0, 0, d * s - 1, d * s - 1), fill="#EFECE7")
+            dr.ellipse((0, 0, d * s - 1, d * s - 1), fill=TRACK)
         else:
             start = -90.0
             gap = 1.2 if len(self.items) > 1 else 0
@@ -331,7 +372,7 @@ class Bars(tk.Canvas, _Redraw):
             y = i * self.row_h + self.row_h // 2
             self.create_text(0, y, text=fit_text(label, self.f_label, label_w - 8, 1), anchor="w", fill=INK,
                              font=self.f_label)
-            track = ImageTk.PhotoImage(rounded_image(bar_w, bh, bh // 2, "#F1EEE9"))
+            track = ImageTk.PhotoImage(rounded_image(bar_w, bh, bh // 2, TRACK))
             self._imgs.append(track)
             self.create_image(label_w, y, image=track, anchor="w")
             bw = max(bh, int(bar_w * value / top))
@@ -358,7 +399,7 @@ class Progress(tk.Canvas, _Redraw):
 
     def redraw(self, w, h):
         self.delete("all")
-        track = ImageTk.PhotoImage(rounded_image(w, h, h // 2, "#EFEBE5"))
+        track = ImageTk.PhotoImage(rounded_image(w, h, h // 2, TRACK))
         self._imgs = [track]
         self.create_image(0, 0, image=track, anchor="nw")
         fw = int(w * self.fraction)
@@ -415,7 +456,7 @@ class ClickCard(tk.Canvas):
         key = (w, h, hover)
         if key not in self._imgs:
             self._imgs = {k: v for k, v in self._imgs.items() if k[:2] == (w, h)}
-            self._imgs[key] = ImageTk.PhotoImage(rounded_image(w, h, 16, CARD, "#FFB27A" if hover else LINE,
+            self._imgs[key] = ImageTk.PhotoImage(rounded_image(w, h, 16, CARD, BTN_HOVER_LINE if hover else LINE,
                                                                width=2 if hover else 1))
         self.delete("all")
         self.create_image(0, 0, image=self._imgs[key], anchor="nw")
@@ -558,12 +599,12 @@ def style_rounded(style, root):
     W, H = 40, 26  # compact pills
     R = H // 2 - 1
     b = dict(border=(R, R), padding=(R // 2 + 2, 1), sticky="nsew")  # padding: not the corner size
-    style.element_create("RButton.border", "image", img(W, H, R, CARD, "#DED9D1"),
-                         ("disabled", img(W, H, R, "#F7F6F4", "#EEEBE6")),
-                         ("pressed", img(W, H, R, "#FFEBD8", ORANGE)),
-                         ("active", img(W, H, R, "#FFF7EF", "#FFB27A")), **b)
+    style.element_create("RButton.border", "image", img(W, H, R, CARD, BTN_LINE),
+                         ("disabled", img(W, H, R, DISABLED, DISABLED_LINE)),
+                         ("pressed", img(W, H, R, BTN_PRESS, ORANGE)),
+                         ("active", img(W, H, R, BTN_HOVER, BTN_HOVER_LINE)), **b)
     style.element_create("AButton.border", "image", img(W, H, R, ORANGE),
-                         ("disabled", img(W, H, R, "#F9CBA0")),
+                         ("disabled", img(W, H, R, ACCENT_OFF)),
                          ("pressed", img(W, H, R, ORANGE_DARK)), ("active", img(W, H, R, ORANGE_DARK)), **b)
     style.element_create("SButton.border", "image", img(W, H, R, CARD),
                          ("pressed", img(W, H, R, HOVER)), ("active", img(W, H, R, HOVER)), **b)
@@ -574,7 +615,7 @@ def style_rounded(style, root):
     # the corners outside the pill show the style's background: keep it the tile's white in every state
     corners = [("disabled", CARD), ("pressed", CARD), ("active", CARD), ("!disabled", CARD)]
     style.configure("TButton", padding=(12, 2), background=CARD, foreground=INK, font=(FONT, 9), width=-4)
-    style.map("TButton", background=corners, foreground=[("disabled", "#A0A4AB")])
+    style.map("TButton", background=corners, foreground=[("disabled", DISABLED_INK)])
     style.configure("Accent.TButton", padding=(14, 2), foreground="white", font=(FONT, 9, "bold"),
                     background=CARD)
     style.map("Accent.TButton", foreground=[("disabled", "white")], background=corners)
@@ -584,26 +625,26 @@ def style_rounded(style, root):
     # Fields: rounded
     FR = 9
     f = dict(border=(FR, FR), padding=(6, 1), sticky="nsew")
-    field = img(W, H, FR, "#FBFAF8", "#E3DED6")
+    field = img(W, H, FR, FIELD, FIELD_LINE)
     focus = img(W, H, FR, CARD, ORANGE, width=2)
-    off = img(W, H, FR, "#F5F3F0", "#EEEBE6")
+    off = img(W, H, FR, DISABLED, DISABLED_LINE)
     style.element_create("REntry.field", "image", field, ("disabled", off), ("focus", focus), **f)
     style.layout("TEntry", [("REntry.field", {"sticky": "nsew", "children": [
         ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})])
-    style.configure("TEntry", padding=(10, 3), fieldbackground="#FBFAF8")
+    style.configure("TEntry", padding=(10, 3), fieldbackground=FIELD)
     style.element_create("RCombo.field", "image", field, ("disabled", off), ("focus", focus), **f)
     style.layout("TCombobox", [("RCombo.field", {"sticky": "nsew", "children": [
         ("Combobox.downarrow", {"side": "right", "sticky": "ns"}),
         ("Combobox.padding", {"expand": "1", "sticky": "nsew", "children": [
             ("Combobox.textarea", {"sticky": "nsew"})]})]})])
-    style.configure("TCombobox", padding=(10, 2), arrowsize=12, background="#FBFAF8", arrowcolor=MUTED,
-                    fieldbackground="#FBFAF8")
-    style.map("TCombobox", background=[("active", "#FBFAF8"), ("pressed", "#FBFAF8")],
-              fieldbackground=[("readonly", "#FBFAF8")])
+    style.configure("TCombobox", padding=(10, 2), arrowsize=12, background=FIELD, arrowcolor=MUTED,
+                    fieldbackground=FIELD)
+    style.map("TCombobox", background=[("active", FIELD), ("pressed", FIELD)],
+              fieldbackground=[("readonly", FIELD)])
 
     # Segmented selector (radio buttons as pills)
-    style.element_create("RSeg.border", "image", img(W, H, R, CARD, "#DED9D1"),
-                         ("selected", img(W, H, R, ORANGE)), ("active", img(W, H, R, "#FFF7EF", "#FFB27A")), **b)
+    style.element_create("RSeg.border", "image", img(W, H, R, CARD, BTN_LINE),
+                         ("selected", img(W, H, R, ORANGE)), ("active", img(W, H, R, BTN_HOVER, BTN_HOVER_LINE)), **b)
     style.layout("Seg.TRadiobutton", [("RSeg.border", {"sticky": "nsew", "children": [
         ("Radiobutton.padding", {"sticky": "nsew", "children": [("Radiobutton.label", {"sticky": "nsew"})]})]})])
     style.configure("Seg.TRadiobutton", padding=(12, 2), background=CARD, font=(FONT, 9, "bold"))
@@ -612,21 +653,21 @@ def style_rounded(style, root):
     w2, h2 = 36, 22
     r2 = h2 // 2 - 1
     b2 = dict(border=(r2, r2), padding=(r2 // 2 + 2, 0), sticky="nsew")
-    style.element_create("RSegS.border", "image", img(w2, h2, r2, CARD, "#DED9D1"),
-                         ("selected", img(w2, h2, r2, ORANGE)), ("active", img(w2, h2, r2, "#FFF7EF", "#FFB27A")),
+    style.element_create("RSegS.border", "image", img(w2, h2, r2, CARD, BTN_LINE),
+                         ("selected", img(w2, h2, r2, ORANGE)), ("active", img(w2, h2, r2, BTN_HOVER, BTN_HOVER_LINE)),
                          **b2)
     style.layout("SegSm.TRadiobutton", [("RSegS.border", {"sticky": "nsew", "children": [
         ("Radiobutton.padding", {"sticky": "nsew", "children": [("Radiobutton.label", {"sticky": "nsew"})]})]})])
     style.configure("SegSm.TRadiobutton", padding=(10, 1), background=CARD, font=(FONT, 9, "bold"))
     style.map("SegSm.TRadiobutton", foreground=[("selected", "white")], background=[("active", CARD)])
-    style.element_create("RButtonS.border", "image", img(w2, h2, r2, CARD, "#DED9D1"),
-                         ("disabled", img(w2, h2, r2, "#F7F6F4", "#EEEBE6")),
-                         ("pressed", img(w2, h2, r2, "#FFEBD8", ORANGE)),
-                         ("active", img(w2, h2, r2, "#FFF7EF", "#FFB27A")), **b2)
+    style.element_create("RButtonS.border", "image", img(w2, h2, r2, CARD, BTN_LINE),
+                         ("disabled", img(w2, h2, r2, DISABLED, DISABLED_LINE)),
+                         ("pressed", img(w2, h2, r2, BTN_PRESS, ORANGE)),
+                         ("active", img(w2, h2, r2, BTN_HOVER, BTN_HOVER_LINE)), **b2)
     style.layout("Small.TButton", [("RButtonS.border", {"sticky": "nsew", "children": [
         ("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})])
     style.configure("Small.TButton", padding=(10, 1), background=CARD, foreground=INK, font=(FONT, 9), width=-4)
-    style.map("Small.TButton", background=corners, foreground=[("disabled", "#A0A4AB")])
+    style.map("Small.TButton", background=corners, foreground=[("disabled", DISABLED_INK)])
 
     # Checkboxes: rounded squares with a tick
     def check(on):
@@ -639,7 +680,7 @@ def style_rounded(style, root):
             d.line([(6 * s, 15 * s), (10 * s, 19 * s), (17 * s, 11 * s)], fill="white", width=int(2.4 * s),
                    joint="curve")
         else:
-            d.rounded_rectangle(box, radius=6 * s, fill=CARD, outline="#CFC9C0", width=int(1.4 * s))
+            d.rounded_rectangle(box, radius=6 * s, fill=CARD, outline=CHECK_LINE, width=int(1.4 * s))
         return photo(im.resize((S, S), Image.LANCZOS))
     style.element_create("RCheck.indicator", "image", check(False), ("selected", check(True)), sticky="")
     for name in ("TCheckbutton", "Card.TCheckbutton"):
@@ -652,10 +693,10 @@ def style_rounded(style, root):
     # Slim rounded scrollbars (no arrows)
     def thumb(w, h, fill):
         return img(w, h, min(w, h) // 2, fill)
-    style.element_create("RThumbV", "image", thumb(10, 40, "#D8D3CB"), ("active", thumb(10, 40, "#BDB6AC")),
-                         ("pressed", thumb(10, 40, "#A9A196")), border=(4, 8), sticky="nsew")
-    style.element_create("RThumbH", "image", thumb(40, 10, "#D8D3CB"), ("active", thumb(40, 10, "#BDB6AC")),
-                         ("pressed", thumb(40, 10, "#A9A196")), border=(8, 4), sticky="nsew")
+    style.element_create("RThumbV", "image", thumb(10, 40, THUMB), ("active", thumb(10, 40, THUMB_HOVER)),
+                         ("pressed", thumb(10, 40, THUMB_PRESS)), border=(4, 8), sticky="nsew")
+    style.element_create("RThumbH", "image", thumb(40, 10, THUMB), ("active", thumb(40, 10, THUMB_HOVER)),
+                         ("pressed", thumb(40, 10, THUMB_PRESS)), border=(8, 4), sticky="nsew")
     style.layout("Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
         ("RThumbV", {"expand": "1", "sticky": "nswe"})]})])
     style.layout("Horizontal.TScrollbar", [("Horizontal.Scrollbar.trough", {"sticky": "ew", "children": [

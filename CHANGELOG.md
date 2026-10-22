@@ -1,5 +1,16 @@
 # GOLD Express - what's new
 
+## 2.4.0
+- **Dark mode**: Settings > Appearance, or "Dark mode" at the bottom of the side menu (GOLD Express
+  restarts to switch).
+- **Ask GOLD history**: chats are saved and listed on the left, grouped by the order numbers they
+  mention. Click one to see it again and carry on asking; right-click to delete; "Save chats" to turn
+  it off.
+- Ask GOLD: a smaller message box (one line, growing as you type) and a smaller send button.
+- Revised Target Date and Order assignment: a **running timer** while orders are processed - total
+  time, which order is being worked on and for how long, and a progress bar; each result shows how
+  long that order took.
+
 ## 2.3.0
 - **Overview** now looks like My Orders: colourful counters (Orders, On track, Due soon, Late,
   Lead time at risk - click one to jump to that order), an Orders tile and an Order details tile.

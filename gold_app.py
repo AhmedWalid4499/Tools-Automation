@@ -45,6 +45,7 @@ SETTINGS_FILE = HERE / "gold_app_settings.json"
 AI_KEY_CACHE = HERE / "ai_key.bin"  # the team's AI key, encrypted for this Windows user
 OC_CACHE = HERE / "orgchart_cache.json"  # Org Chart lookups of GOLD team members (kept 7 days)
 MY_SNAPSHOT = HERE / "my_orders_snapshot.json"  # last My orders read, to notice changes
+CHATS_DIR = HERE / "chats"  # saved Ask GOLD chats
 
 # Palette (warm light background, white rounded panels, orange accent) - see gold_ui
 ORANGE = gui.ORANGE
@@ -58,8 +59,8 @@ CANVAS = BG
 CARD = gui.CARD
 LINE = gui.LINE
 HEADER = "#111111"
-GREEN = "#1E7B34"
-RED = "#C62828"
+GREEN = gui.GREEN_FG
+RED = gui.RED_FG
 FONT = "Segoe UI"
 
 
@@ -75,7 +76,8 @@ def load_settings():
          "parallel_sessions": True, "ai_key_file": "",
          # Windows notifications
          "notify_on": True, "notify_orders": True, "notify_every": "30", "notify_digest": True,
-         "notify_updates": True, "notify_tasks": True, "notified_version": "", "digest_date": ""}
+         "notify_updates": True, "notify_tasks": True, "notified_version": "", "digest_date": "",
+         "theme": "light", "save_chats": True}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -387,7 +389,7 @@ class App(tk.Tk):
         self.ui(add)
 
     # status pill colours on the light background, by the colour callers give for the state
-    PILL = {"#7BD88F": ("#1E7B34", "#E4F4E8"), "#FF8A80": ("#C62828", "#FDE7E7")}
+    PILL = {"#7BD88F": (gui.GREEN_FG, gui.GREEN_BG), "#FF8A80": (gui.RED_FG, gui.RED_BG)}
 
     def _set_pill(self, text, fg, bg):
         fg, bg = self.PILL.get(fg, (ORANGE_DARK, ORANGE_SOFT))
@@ -515,6 +517,33 @@ class App(tk.Tk):
         self._place_dialog(win)
         return win
 
+    # ----- light / dark mode
+    def _set_theme(self, name):
+        """Save the theme; the colours are set when the app starts, so offer to restart now."""
+        if name == gui.THEME:
+            return
+        self.settings["theme"] = name
+        self._store_settings()
+        win, body = self._dialog("Appearance", width=440)
+        self._dialog_head(body, f"Switch to {name} mode?",
+                          "GOLD Express restarts to change its colours (a few seconds). Nothing is lost - "
+                          "your settings and saved chats stay.", "")
+        row = tk.Frame(body, background=CARD)
+        row.pack(fill="x", pady=(16, 0))
+        ttk.Button(row, text="Restart now", style="Accent.TButton",
+                   command=lambda: (win.destroy(), self._restart())).pack(side="right")
+        ttk.Button(row, text="Later", command=win.destroy).pack(side="right", padx=(0, 8))
+        self._place_dialog(win)
+
+    def _restart(self):
+        """Start a new GOLD Express that waits for this one to close, then close."""
+        import subprocess
+        import sys as _sys
+        args = [_sys.executable] + ([] if getattr(_sys, "frozen", False) else [str(Path(__file__).resolve())])
+        subprocess.Popen(args + ["--after-pid", str(os.getpid())], close_fds=True,
+                         creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        self._on_close()
+
     # ----- the update window
     def _update_dialog(self, rel):
         win, body = self._dialog("Update", width=560)
@@ -524,7 +553,7 @@ class App(tk.Tk):
                           badge=f"v{rel['version']}")
         tk.Label(body, text="WHAT'S NEW", bg=CARD, fg=FAINT, font=(FONT, 8, "bold"), anchor="w").pack(
             fill="x", pady=(16, 4))
-        notes = tk.Text(body, height=9, wrap="word", relief="flat", background="#FBFAF8", foreground=INK,
+        notes = tk.Text(body, height=9, wrap="word", relief="flat", background=gui.FIELD, foreground=INK,
                         padx=12, pady=8, highlightthickness=1, highlightbackground=LINE, borderwidth=0,
                         font=(FONT, 9), cursor="arrow")
         notes.pack(fill="both", expand=True)
@@ -695,6 +724,12 @@ class App(tk.Tk):
         self.option_add("*Font", (FONT, 10))
         self.option_add("*TCombobox*Listbox.font", (FONT, 10))
         self.option_add("*TCombobox*Listbox.selectBackground", ORANGE)
+        # drop-down lists and right-click menus follow the theme too
+        for pattern, value in (("*TCombobox*Listbox.background", CARD), ("*TCombobox*Listbox.foreground", INK),
+                               ("*TCombobox*Listbox.selectForeground", "white"), ("*Menu.background", CARD),
+                               ("*Menu.foreground", INK), ("*Menu.activeBackground", ORANGE_SOFT),
+                               ("*Menu.activeForeground", INK), ("*Text.insertBackground", INK)):
+            self.option_add(pattern, value)
         st.configure(".", background=CARD, foreground=INK, font=(FONT, 10), bordercolor=LINE,
                      lightcolor=LINE, darkcolor=LINE, focuscolor=ORANGE)
         st.configure("TFrame", background=CARD)
@@ -769,8 +804,8 @@ class App(tk.Tk):
                      arrowsize=12)
         # Softer tables, rounded buttons and fields
         st.configure("Treeview", rowheight=30, foreground=INK)
-        st.configure("Treeview.Heading", background="#FAF8F5", foreground=MUTED, padding=(8, 7))
-        st.map("Treeview.Heading", background=[("active", "#F4F1EC")])
+        st.configure("Treeview.Heading", background=gui.HEAD_BG, foreground=MUTED, padding=(8, 7))
+        st.map("Treeview.Heading", background=[("active", gui.HEAD_ACTIVE)])
         gui.style_rounded(st, self)
 
     def _btn(self, parent, text, cmd, style=None, **grid):
@@ -865,6 +900,8 @@ class App(tk.Tk):
         self.update_btn.pack(fill="x", pady=(0, 2))
         ttk.Button(nav.bottom, text="⚙  Settings", style="Side.TButton",
                    command=self._open_settings).pack(fill="x")
+        ttk.Button(nav.bottom, text="☼  Light mode" if gui.DARK else "☾  Dark mode", style="Side.TButton",
+                   command=lambda: self._set_theme("light" if gui.DARK else "dark")).pack(fill="x", pady=(2, 0))
         tk.Label(nav.bottom, text=f"Version {__version__}  ·  © {AUTHOR}", bg=CARD, fg=FAINT,
                  font=(FONT, 8), anchor="w").pack(fill="x", padx=12, pady=(10, 0))
         self.bulk_stop_flag = threading.Event()
@@ -1016,6 +1053,17 @@ class App(tk.Tk):
         show_key_state()
         old_key = self.ai_key_file.get()
 
+        ttk.Label(body, text="Appearance", style="CardHead.TLabel").grid(
+            row=19, column=0, sticky="w", columnspan=4, pady=(16, 2))
+        look = tk.Frame(body, background=CARD)
+        look.grid(row=20, column=0, columnspan=4, sticky="w", pady=2)
+        theme = tk.StringVar(value=gui.THEME)
+        for value, label in (("light", "☼  Light"), ("dark", "☾  Dark")):
+            ttk.Radiobutton(look, text=label, value=value, variable=theme, style="SegSm.TRadiobutton",
+                            command=lambda: (close(), self._set_theme(theme.get()))).pack(side="left", padx=(0, 4))
+        tk.Label(look, text="GOLD Express restarts to switch", bg=CARD, fg=MUTED, font=(FONT, 8)).pack(
+            side="left", padx=10)
+
         ttk.Label(body, text="Notifications", style="CardHead.TLabel").grid(
             row=13, column=0, sticky="w", columnspan=4, pady=(16, 2))
         ttk.Checkbutton(body, text="Show Windows notifications", variable=self.notify_on,
@@ -1049,7 +1097,7 @@ class App(tk.Tk):
             win.destroy()
 
         btns = ttk.Frame(body, style="Card.TFrame")
-        btns.grid(row=20, column=0, columnspan=4, sticky="ew", pady=(18, 0))
+        btns.grid(row=22, column=0, columnspan=4, sticky="ew", pady=(18, 0))
         ttk.Label(btns, text=f"{APP_NAME} {__version__}  ·  \u00a9 2026 {AUTHOR}  ·  data folder: {HERE}",
                   style="CardMuted.TLabel", font=(FONT, 8)).pack(side="left")
         ttk.Button(btns, text="Done", style="Accent.TButton", command=close).pack(side="right")
@@ -1163,7 +1211,7 @@ class App(tk.Tk):
         self.my_tree.configure(displaycolumns=self.MY_SHOWN)
         self.my_tree.tag_configure("Closed", foreground=MUTED)
         self.my_tree.tag_configure("late", foreground=RED)
-        self.my_tree.tag_configure("odd", background="#FAF9F7")
+        self.my_tree.tag_configure("odd", background=gui.ZEBRA)
         sb = ttk.Scrollbar(tf, orient="vertical", command=self.my_tree.yview)
         self.my_tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
@@ -1404,8 +1452,8 @@ class App(tk.Tk):
             os.startfile(path)
 
     # ----- Overview tab
-    RAG_UI = {"Red": ("#C62828", "#FDE7E7"), "Amber": ("#A15C00", "#FFF3D6"),
-              "Green": ("#1E7B34", "#E4F4E8"), "No date": ("#595959", "#EFEFEF")}
+    RAG_UI = {"Red": (gui.RED_FG, gui.RED_BG), "Amber": (gui.AMBER_FG, gui.AMBER_BG),
+              "Green": (gui.GREEN_FG, gui.GREEN_BG), "No date": (gui.GREY_FG, gui.GREY_BG)}
 
     def _tile_head(self, parent, title, icon):
         """A tile's title row (icon + bold title); returns the row so buttons can go on its right."""
@@ -1496,8 +1544,8 @@ class App(tk.Tk):
         self.ov_banner = tk.Label(right, text="", anchor="w", font=(FONT, 11, "bold"), background=CARD)
         tf = tk.Frame(right, background=CARD)
         tf.pack(fill="both", expand=True)
-        self.ov_text = tk.Text(tf, wrap="word", font=(FONT, 10), relief="flat", background=CARD,
-                               padx=4, pady=4, tabs=("230",), spacing1=2, spacing3=2)
+        self.ov_text = tk.Text(tf, wrap="word", font=(FONT, 10), relief="flat", background=CARD, foreground=INK,
+                               padx=4, pady=4, tabs=("230",), spacing1=2, spacing3=2, highlightthickness=0)
         sb = ttk.Scrollbar(tf, command=self.ov_text.yview)
         self.ov_text.configure(yscrollcommand=sb.set, state="disabled")
         sb.pack(side="right", fill="y")
@@ -1758,13 +1806,22 @@ class App(tk.Tk):
     def _bulk_bar(self, f, dry_var, run_cmd, check_cmd):
         rb = tk.Frame(f, background=CARD, pady=8)
         rb.pack(fill="x")
-        ttk.Checkbutton(rb, text="Test only (do everything except the final save)",
-                        variable=dry_var).pack(side="left")
+        ttk.Checkbutton(rb, text="Test only (no final save)", variable=dry_var).pack(side="left")
         stop = ttk.Button(rb, text="Stop", command=self._bulk_stop)
         stop.pack(side="right")
         stop.state(["disabled"])
         self._btn(rb, "Run update", run_cmd, "Accent.TButton").pack(side="right", padx=6)
         ttk.Button(rb, text="Check", command=check_cmd).pack(side="right")
+        # Run status (shown while a run is going, in the same row): clock, which order, progress
+        info = tk.Frame(rb, background=CARD)
+        clock = tk.Label(info, text="", bg=ORANGE_SOFT, fg=ORANGE_DARK, font=("Consolas", 11, "bold"), padx=10,
+                         pady=2)
+        clock.pack(side="left")
+        text = tk.Label(info, text="", bg=CARD, fg=INK, font=(FONT, 9), anchor="w")
+        text.pack(side="left", padx=10)
+        bar = gui.Progress(info, height=6)
+        bar.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        stop.run_info = (info, clock, text, bar, rb)
         return stop
 
     def _bulk_stop(self):
@@ -1778,6 +1835,28 @@ class App(tk.Tk):
         self.bulk_stop_flag.clear()
         stop_btn.state(["!disabled"])
         w = self.worker
+        # A running clock so the user sees it is working: total time, current order and its time
+        info, clock, text, bar, rb = stop_btn.run_info
+        run = {"start": time.time(), "n": len(items), "k": 0, "iid": None, "order": "", "t": time.time(),
+               "on": True, "ok": 0}
+        info.pack(side="left", fill="x", expand=True, padx=(16, 12))
+        bar.set(0)
+
+        def mmss(s):
+            s = int(s)
+            return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60:02d}:{s % 60:02d}"
+
+        def tick():
+            if not run["on"]:
+                return
+            now = time.time()
+            clock.configure(text=f"⏱ {mmss(now - run['start'])}")
+            if run["iid"]:
+                secs = int(now - run["t"])
+                text.configure(text=f"{run['k']}/{run['n']}  ·  {run['order']}  ·  {secs} s")
+                grid.set_status(run["iid"], f"Working...  {secs} s", "run")
+            self.after(1000, tick)
+        tick()
 
         def set_status(iid, text, tag):
             self.ui(lambda: grid.set_status(iid, text, tag))
@@ -1785,20 +1864,26 @@ class App(tk.Tk):
         def job():
             w.ensure_browser()
             results = []
-            for iid, item, row in items:
+            for k, (iid, item, row) in enumerate(items, 1):
                 if self.bulk_stop_flag.is_set():
                     set_status(iid, "Skipped (stopped)", "bad")
                     results.append(row + ["SKIPPED", "stopped"])
                     continue
+                self.ui(lambda iid=iid, k=k, order=row[0]: (
+                    run.update(iid=iid, k=k, order=order, t=time.time()), bar.set((k - 1) / max(run["n"], 1))))
                 set_status(iid, "Working...", "run")
                 try:
                     w.ensure_browser()  # reconnects if the connection dropped (saves are not retried)
+                    t0 = time.time()
                     msg = action(w.driver, w.wait, item)
+                    msg = f"{msg}  ({int(time.time() - t0)} s)"
+                    self.ui(lambda: run.update(iid=None))  # stop the row's own clock before its result shows
                     set_status(iid, f"✓ {msg}", "ok")
                     results.append(row + ["OK", msg])
                     self.log(f"{row[0]}: {msg}")
                 except Exception as e:
                     err = str(e).splitlines()[0] if str(e) else type(e).__name__
+                    self.ui(lambda: run.update(iid=None))
                     set_status(iid, f"✗ {err}", "bad")
                     results.append(row + ["FAILED", err])
                     self.log(f"{row[0]}: FAILED - {err}")
@@ -1813,9 +1898,23 @@ class App(tk.Tk):
                            [("Results", columns + ["Result", "Details"], results)])
             return path, results
 
+        def finish(summary):
+            run["on"] = False
+            bar.set(1)
+            clock.configure(text=f"⏱ {mmss(time.time() - run['start'])}")
+            text.configure(text=summary)
+
+        def watch_failure():  # the whole run stopped with an error: stop the clock too
+            if run["on"] and not self.busy:
+                finish("Stopped - see the message")
+            elif run["on"]:
+                self.after(1000, watch_failure)
+        self.after(1500, watch_failure)
+
         def done(res):
             path, results = res
             ok = sum(1 for r in results if r[len(columns)] == "OK")
+            finish(f"{ok} of {len(results)} {'tested' if dry else 'done'}")
             self.log(f"{label}: {ok} of {len(results)} OK. Results: {path}")
             if messagebox.askyesno(APP_NAME, f"{ok} of {len(results)} order(s) "
                                              f"{'tested' if dry else 'done'}.\n\nResults saved to\n{path}"
@@ -2058,7 +2157,7 @@ class App(tk.Tk):
             self.names_tree.column(c, width=w, anchor="w", stretch=c == "check")
         self.names_tree.tag_configure("ok", foreground=GREEN)
         self.names_tree.tag_configure("bad", foreground=RED)
-        self.names_tree.tag_configure("odd", background="#FAFAFB")
+        self.names_tree.tag_configure("odd", background=gui.ZEBRA)
         sb = ttk.Scrollbar(lf, command=self.names_tree.yview)
         self.names_tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
@@ -2316,7 +2415,7 @@ class App(tk.Tk):
         for c, t, w in self.OC_COLUMNS:
             self.oc_tree.heading(c, text=t, anchor="w")
             self.oc_tree.column(c, width=w, anchor="w")
-        self.oc_tree.tag_configure("odd", background="#FAFAFB")
+        self.oc_tree.tag_configure("odd", background=gui.ZEBRA)
         self.oc_tree.tag_configure("missing", foreground=MUTED)
         sb = ttk.Scrollbar(tf, orient="vertical", command=self.oc_tree.yview)
         self.oc_tree.configure(yscrollcommand=sb.set)
@@ -2504,7 +2603,17 @@ class App(tk.Tk):
 
     def _build_ask_tab(self, f):
         self.ask_frame = f
-        f = self._tile(f, pad=8, fill="both", expand=True).body  # the whole chat in one rounded tile
+        scale = self.winfo_fpixels("1i") / 96
+        f.columnconfigure(1, weight=1)
+        f.rowconfigure(0, weight=1)
+        # Saved chats, grouped by order number (left)
+        ht = self._tile(f, pad=6)
+        ht.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        ht.body.configure(width=int(250 * scale))
+        self._build_ask_history(ht.body)
+        ct = self._tile(f, pad=8)
+        ct.grid(row=0, column=1, sticky="nsew")
+        f = ct.body  # the chat itself (right)
         # Header: what it does | order in context, New chat
         head = tk.Frame(f, background=CARD, padx=12, pady=4)
         head.pack(fill="x")
@@ -2517,28 +2626,30 @@ class App(tk.Tk):
         # Composer (bottom): a rounded field with a round send button
         foot = tk.Frame(f, background=CARD, padx=8, pady=4)
         foot.pack(side="bottom", fill="x")
-        comp = gui.Tile(foot, radius=20, pad=2, bg=CARD, fill="#FBFAF8", shadow=False, outline="#E3DED6")
+        comp = gui.Tile(foot, radius=14, pad=0, bg=CARD, fill=gui.FIELD, shadow=False, outline=gui.FIELD_LINE)
         comp.pack(fill="x")
         box = comp.body
-        self._send_imgs = {s: ImageTk.PhotoImage(gui.rounded_image(42, 42, 21, c), master=self)
-                           for s, c in (("on", ORANGE), ("hover", ORANGE_DARK), ("off", "#F9CBA0"))}
+        d = int(28 * scale)
+        self._send_imgs = {s: ImageTk.PhotoImage(gui.rounded_image(d, d, d // 2, c), master=self)
+                           for s, c in (("on", ORANGE), ("hover", ORANGE_DARK), ("off", gui.ACCENT_OFF))}
         self.ask_send = tk.Label(box, image=self._send_imgs["on"], text="", compound="center",
-                                 fg="white", font=(gui.ICONS, 12), bg="#FBFAF8", cursor="hand2", bd=0)
-        self.ask_send.pack(side="right", padx=(6, 2))  # packed first: always visible
+                                 fg="white", font=(gui.ICONS, 9), bg=gui.FIELD, cursor="hand2", bd=0)
+        self.ask_send.pack(side="right", padx=(6, 0))  # packed first: always visible
         self.ask_send.bind("<Enter>", lambda e: self.busy or self.ask_send.configure(image=self._send_imgs["hover"]))
         self.ask_send.bind("<Leave>", lambda e: self.busy or self.ask_send.configure(image=self._send_imgs["on"]))
-        self.ask_input = tk.Text(box, height=2, wrap="word", font=(FONT, 11), relief="flat", padx=8, pady=6,
-                                 background="#FBFAF8", foreground=INK, insertbackground=INK, highlightthickness=0,
+        # one line to start with; it grows (up to 5 lines) as the question gets longer
+        self.ask_input = tk.Text(box, height=1, wrap="word", font=(FONT, 10), relief="flat", padx=6, pady=3,
+                                 background=gui.FIELD, foreground=INK, insertbackground=INK, highlightthickness=0,
                                  borderwidth=0)
         self.ask_input.pack(side="left", fill="both", expand=True)
         self.ask_send.bind("<Button-1>", lambda e: self._ask_send())
-        self.ask_placeholder = tk.Label(box, bg="#FBFAF8", fg="#9CA3AF", font=(FONT, 11), cursor="xterm")
-        self.ask_placeholder.place(x=10, y=6)
+        self.ask_placeholder = tk.Label(box, bg=gui.FIELD, fg=gui.PLACEHOLDER, font=(FONT, 10), cursor="xterm")
+        self.ask_placeholder.place(x=8, y=3)
         self.ask_placeholder.bind("<Button-1>", lambda e: self.ask_input.focus_set())
         self.ask_input.bind("<Return>", lambda e: (self._ask_send(), "break")[1])
-        self.ask_input.bind("<Shift-Return>", lambda e: None)
+        self.ask_input.bind("<Shift-Return>", lambda e: self.after(1, self._ask_input_changed))
         self.ask_input.bind("<KeyRelease>", lambda e: self._ask_input_changed())
-        comp_outline = {True: ORANGE, False: "#E3DED6"}
+        comp_outline = {True: ORANGE, False: gui.FIELD_LINE}
         for ev, on in (("<FocusIn>", True), ("<FocusOut>", False)):
             self.ask_input.bind(ev, lambda e, on=on: (setattr(comp, "outline", comp_outline[on]),
                                                        setattr(comp, "_size", None), comp._soon()))
@@ -2547,7 +2658,7 @@ class App(tk.Tk):
         self.ask_status = tk.Label(hints, text="", bg=CARD, fg=MUTED, font=(FONT, 8))
         self.ask_status.pack(side="left")
         tk.Label(hints, text="Enter to send  ·  Shift+Enter for a new line  ·  right-click a table to copy it",
-                 bg=CARD, fg="#9CA3AF", font=(FONT, 8)).pack(side="right")
+                 bg=CARD, fg=gui.PLACEHOLDER, font=(FONT, 8)).pack(side="right")
 
         # Conversation
         body = tk.Frame(f, background=self.CHAT_BG)
@@ -2564,7 +2675,7 @@ class App(tk.Tk):
         gmd.setup(t, font=FONT, ink=INK, muted=MUTED, accent=ORANGE, soft=ORANGE_SOFT, line=LINE,
                   indent=self.ASK_INDENT)
         t.tag_configure("right", justify="right", spacing1=14, spacing3=2, rmargin=4)
-        t.tag_configure("meta", font=(FONT, 8), foreground="#9CA3AF")
+        t.tag_configure("meta", font=(FONT, 8), foreground=gui.PLACEHOLDER)
         t.tag_configure("who", font=(FONT, 10, "bold"), foreground=INK, spacing1=16, spacing3=4)
         t.tag_raise("meta")
         t.tag_configure("center", justify="center")
@@ -2610,13 +2721,19 @@ class App(tk.Tk):
         self._ask_input_changed()
 
     def _ask_input_changed(self):
+        try:  # grow with the question: 1 to 5 lines
+            lines = self.ask_input.count("1.0", "end-1c", "displaylines")
+            lines = (lines[0] if isinstance(lines, tuple) else lines or 0) + 1
+        except tk.TclError:
+            lines = 1
+        self.ask_input.configure(height=max(1, min(5, lines)))
         if self.ask_input.get("1.0", "end").strip():
             self.ask_placeholder.place_forget()
         else:
             order = self._ask_context_order()
             self.ask_placeholder.configure(text=f"Ask about {order} or any other order..." if order
                                            else "Ask about a GOLD order, e.g. deadlines of 10-1234567")
-            self.ask_placeholder.place(x=14, y=10)
+            self.ask_placeholder.place(x=8, y=3)
 
     def _ask_wheel(self, e):
         w = e.widget
@@ -2690,8 +2807,150 @@ class App(tk.Tk):
         if self.busy:
             return
         if self.chat:
-            self.chat.messages.clear()
+            self.chat.messages = []
+        self.ask_restore, self.ask_log, self.ask_chat_id = None, [], None
+        self._chat_fill_history()
         self._ask_welcome()
+
+    # --- saved chats (Ask GOLD history), one JSON file per chat in <data folder>\chats
+    ORDER_RE = re.compile(r"\b\d{2}-\d{6,8}\b")
+
+    def _build_ask_history(self, f):
+        self.ask_log, self.ask_chat_id, self.ask_restore = [], None, None
+        self.save_chats = tk.BooleanVar(value=self.settings.get("save_chats", True))
+        head = self._tile_head(f, "History", "")
+        ttk.Checkbutton(f, text="Save chats", variable=self.save_chats, style="Card.TCheckbutton",
+                        command=lambda: (self.settings.update(save_chats=self.save_chats.get()),
+                                         save_settings(self.settings))).pack(anchor="w", pady=(0, 6))
+        self.chat_find = tk.StringVar()
+        ent = ttk.Entry(f, textvariable=self.chat_find, font=(FONT, 9))
+        ent.pack(fill="x", pady=(0, 6))
+        ent.bind("<KeyRelease>", lambda e: self._chat_fill_history())
+        tf = tk.Frame(f, background=CARD)
+        tf.pack(fill="both", expand=True)
+        self.chat_tree = ttk.Treeview(tf, show="tree", selectmode="browse")
+        self.chat_tree.column("#0", width=200, stretch=True)
+        self.chat_tree.tag_configure("group", font=(FONT, 9, "bold"), foreground=INK)
+        self.chat_tree.tag_configure("chat", font=(FONT, 9), foreground=MUTED)
+        self.chat_tree.tag_configure("current", foreground=ORANGE_DARK)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.chat_tree.yview)
+        self.chat_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.chat_tree.pack(side="left", fill="both", expand=True)
+        self.chat_tree.bind("<<TreeviewSelect>>", lambda e: self._chat_open_selected())
+        self.chat_tree.bind("<Button-3>", self._chat_menu)
+        tk.Label(f, text="Grouped by the order numbers in each chat", bg=CARD, fg=FAINT, font=(FONT, 8),
+                 anchor="w").pack(fill="x", pady=(4, 0))
+        self._chat_fill_history()
+
+    @staticmethod
+    def _plain_messages(messages):
+        """Claude's conversation as plain JSON (the SDK's content blocks become dicts)."""
+        out = []
+        for m in messages:
+            content = m["content"]
+            if not isinstance(content, str):
+                content = [b.model_dump(exclude_none=True) if hasattr(b, "model_dump") else b for b in content]
+            out.append({"role": m["role"], "content": content})
+        return out
+
+    def _chat_save(self):
+        if not self.save_chats.get() or not self.ask_log:
+            return
+        if not self.ask_chat_id:
+            self.ask_chat_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+        orders = set()
+        for e in self.ask_log:
+            orders.update(self.ORDER_RE.findall(e["you"] + " " + e["answer"]))
+            if e.get("order"):
+                orders.add(e["order"])
+        data = {"id": self.ask_chat_id, "title": self.ask_log[0]["you"][:80], "orders": sorted(orders),
+                "updated": datetime.now().isoformat(timespec="minutes"), "log": self.ask_log,
+                "messages": self._plain_messages(self.chat.messages) if self.chat else []}
+        try:
+            CHATS_DIR.mkdir(parents=True, exist_ok=True)
+            (CHATS_DIR / f"{self.ask_chat_id}.json").write_text(json.dumps(data, ensure_ascii=False, default=str),
+                                                               encoding="utf-8")
+        except OSError as e:
+            self.log(f"Could not save the chat: {e}")
+        self._chat_fill_history()
+
+    def _chat_list(self):
+        chats = []
+        for p in CHATS_DIR.glob("*.json") if CHATS_DIR.exists() else []:
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                chats.append({"id": d["id"], "title": d.get("title", ""), "orders": d.get("orders", []),
+                              "updated": d.get("updated", "")})
+            except (OSError, ValueError, KeyError):
+                continue
+        return sorted(chats, key=lambda c: c["updated"], reverse=True)
+
+    def _chat_fill_history(self):
+        if not hasattr(self, "chat_tree"):
+            return
+        q = self.chat_find.get().strip().lower()
+        t = self.chat_tree
+        open_groups = {i for i in t.get_children() if t.item(i, "open")}
+        t.delete(*t.get_children())
+        groups = {}
+        for c in self._chat_list():
+            if q and q not in (c["title"] + " " + " ".join(c["orders"])).lower():
+                continue
+            for o in c["orders"] or ["Other chats"]:
+                groups.setdefault(o, []).append(c)
+        # orders with the newest chat first; "Other chats" last
+        for o in sorted(groups, key=lambda o: (o == "Other chats", -max(
+                datetime.fromisoformat(c["updated"]).timestamp() if c["updated"] else 0 for c in groups[o]))):
+            gid = f"g:{o}"
+            t.insert("", "end", iid=gid, text=f"{o}   ({len(groups[o])})", tags=("group",),
+                     open=gid in open_groups or bool(q) or o == self._ask_context_order())
+            for c in groups[o]:
+                when = c["updated"][5:16].replace("T", " ") if c["updated"] else ""
+                tags = ("chat", "current") if c["id"] == self.ask_chat_id else ("chat",)
+                t.insert(gid, "end", iid=f"c:{o}:{c['id']}", text=f"{c['title'][:40]}  ·  {when}", tags=tags)
+
+    def _chat_open_selected(self):
+        sel = self.chat_tree.selection()
+        if not sel or not sel[0].startswith("c:") or self.busy:
+            return
+        chat_id = sel[0].rsplit(":", 1)[1]
+        if chat_id == self.ask_chat_id:
+            return
+        try:
+            d = json.loads((CHATS_DIR / f"{chat_id}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        self.ask_chat_id, self.ask_log = chat_id, d.get("log", [])
+        # continue the conversation: Claude gets the earlier messages back
+        if self.chat:
+            self.chat.messages = d.get("messages", [])
+        else:
+            self.ask_restore = d.get("messages", [])
+        self._ask_clear()
+        for e in self.ask_log:
+            self._ask_user_message(e["you"])
+            self._ask_answer(e["answer"], e.get("ok", True))
+        self.ask_text.see("end")
+        self._chat_fill_history()
+
+    def _chat_menu(self, e):
+        iid = self.chat_tree.identify_row(e.y)
+        if not iid or not iid.startswith("c:"):
+            return
+        chat_id = iid.rsplit(":", 1)[1]
+
+        def delete():
+            try:
+                (CHATS_DIR / f"{chat_id}.json").unlink()
+            except OSError:
+                pass
+            if chat_id == self.ask_chat_id:
+                self._ask_new()
+            self._chat_fill_history()
+        m = tk.Menu(self, tearoff=0)
+        m.add_command(label="Delete this chat", command=delete)
+        m.tk_popup(e.x_root, e.y_root)
 
     # --- messages
     def _ask_user_message(self, question):
@@ -2749,7 +3008,7 @@ class App(tk.Tk):
                 return
             gmd.render(t, answer, max(500, t.winfo_width() - 60))
             tag = f"copy{len(t.tag_names())}"
-            t.insert("end", "⧉  Copy answer", ("action", tag))
+            t.insert("end", "Copy answer", ("action", tag))
             t.insert("end", "\n", ("action",))
             text = gmd.plain(answer)
             t.tag_bind(tag, "<Button-1>", lambda e: (self.clipboard_clear(), self.clipboard_append(text),
@@ -2791,7 +3050,8 @@ class App(tk.Tk):
             if fresh:  # the saved key was refused (e.g. replaced by a new one): fetch it again
                 gai.forget_cached_key(AI_KEY_CACHE)
             key = gai.get_key(chosen, AI_KEY_CACHE, driver, self.log)
-            history = self.chat.messages if self.chat else []
+            history = self.chat.messages if self.chat else getattr(self, "ask_restore", None) or []
+            self.ask_restore = None
             self.chat = gai.Chat(key, gai.GoldReader(self))
             self.chat.messages = history
 
@@ -2816,13 +3076,16 @@ class App(tk.Tk):
             self.ask_send.configure(image=self._send_imgs["on"], cursor="hand2")
             self._ask_answer(answer, ok)
             self.ask_input.focus_set()
+            self.ask_log.append({"you": question, "answer": answer, "ok": ok, "order": order,
+                                 "time": datetime.now().isoformat(timespec="minutes")})
+            self._chat_save()
 
         self.worker.submit("Asking GOLD", job, done)
 
     def _build_text_view(self):
         f = self.text_view = ttk.Frame(self.content)
         self.text = tk.Text(f, wrap="word", font=("Segoe UI", 10), relief="flat",
-                            background="white", padx=10, pady=8)
+                            background=CARD, foreground=INK, insertbackground=INK, padx=10, pady=8)
         sb = ttk.Scrollbar(f, command=self.text.yview)
         self.text.configure(yscrollcommand=sb.set, state="disabled", tabs=("260",))
         self.text.tag_configure("section", font=("Segoe UI Semibold", 11), foreground=ORANGE,
@@ -2862,7 +3125,7 @@ class App(tk.Tk):
         e = ttk.Entry(bar, textvariable=self.find_var, width=28)
         e.pack(side="left", padx=6)
         e.bind("<KeyRelease>", lambda ev: self._find_person())
-        self.find_result = ttk.Label(bar, text="", foreground="#595959")
+        self.find_result = ttk.Label(bar, text="", foreground=MUTED)
         self.find_result.pack(side="left", padx=6)
 
         panes = ttk.Panedwindow(f, orient="horizontal")
@@ -2879,8 +3142,9 @@ class App(tk.Tk):
         rf = ttk.Frame(panes, padding=(8, 0, 0, 0))
         self.members_title = ttk.Label(rf, text="Members", style="Head.TLabel")
         self.members_title.pack(anchor="w")
-        self.members = tk.Listbox(rf, font=("Segoe UI", 10), activestyle="none",
-                                  selectbackground=ORANGE, borderwidth=1, highlightthickness=0)
+        self.members = tk.Listbox(rf, font=("Segoe UI", 10), activestyle="none", background=CARD, foreground=INK,
+                                  selectbackground=ORANGE, selectforeground="white", borderwidth=0,
+                                  highlightthickness=0)
         self.members.pack(fill="both", expand=True, pady=(4, 0))
         self.members.bind("<Double-Button-1>", self._oc_lookup_member)
         ttk.Label(rf, text="Double-click a member to see their email, job and manager (Org Chart)",
@@ -3356,6 +3620,15 @@ if __name__ == "__main__":
         # One GOLD Express at a time: two copies can't share the Firefox profile.
         import ctypes
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if "--after-pid" in sys.argv:  # a restart (e.g. light / dark mode): wait for the old window to close
+            try:
+                pid = int(sys.argv[sys.argv.index("--after-pid") + 1])
+                handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+                if handle:
+                    kernel32.WaitForSingleObject(handle, 30_000)
+                    kernel32.CloseHandle(handle)
+            except (ValueError, IndexError):
+                pass
         mutex = kernel32.CreateMutexW(None, False, "Local\\GOLDExpressSingleInstance")
         if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
             r = tk.Tk(); r.withdraw()
