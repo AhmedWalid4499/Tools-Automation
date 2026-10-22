@@ -21,6 +21,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from PIL import ImageTk
 from selenium.webdriver.support.ui import WebDriverWait
 
 import gold_ai as gai
@@ -368,7 +369,7 @@ class App(tk.Tk):
 
     def _set_pill(self, text, fg, bg):
         fg, bg = self.PILL.get(fg, (ORANGE_DARK, ORANGE_SOFT))
-        self.status.configure(text=f"●  {text}", fg=fg, bg=bg)
+        self.status.set(f"●  {text}", fg, bg)
 
     def set_busy(self, label):
         self.busy = True
@@ -645,7 +646,7 @@ class App(tk.Tk):
         self.page_title.pack(anchor="w")
         self.page_sub = tk.Label(titles, text="", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w")
         self.page_sub.pack(anchor="w")
-        self.status = tk.Label(top, font=(FONT, 9, "bold"), bd=0, padx=12, pady=5)
+        self.status = gui.Pill(top, "Ready")
         self.status.pack(side="right", pady=(4, 0))
         self._set_pill("Ready", "#7BD88F", "#2A2A2A")
 
@@ -658,16 +659,15 @@ class App(tk.Tk):
                                    font=(FONT, 9, "bold"))
         self.log_toggle.pack(side="right")
         self.log_toggle.bind("<Button-1>", lambda e: self._toggle_log())
-        self.log_frame = tk.Frame(right, background=BG, padx=24)
-        self.log_box = tk.Text(self.log_frame, height=7, state="disabled", font=("Consolas", 9),
-                               background=CARD, foreground=INK, relief="flat", padx=10, pady=6,
-                               highlightthickness=1, highlightbackground=LINE)
+        self.log_frame = gui.Tile(right, pad=4)
+        self.log_box = tk.Text(self.log_frame.body, height=7, state="disabled", font=("Consolas", 9),
+                               background=CARD, foreground=INK, relief="flat", padx=6, pady=2,
+                               highlightthickness=0, borderwidth=0)
         self.log_box.pack(fill="both", expand=True)
 
-        # The page, in a rounded white panel
-        panel = gui.Panel(right, radius=18)
-        panel.pack(fill="both", expand=True, padx=(16, 24), pady=(0, 10))
-        content_host = panel.body
+        # The page: its parts sit in rounded tiles on the background
+        content_host = tk.Frame(right, background=BG)
+        content_host.pack(fill="both", expand=True, padx=(12, 18), pady=(0, 4))
 
         # Side menu: logo, pages by section, then updates / settings
         nav = self.notebook = gui.SideNav(side, content_host, on_change=self._page_changed)
@@ -686,7 +686,7 @@ class App(tk.Tk):
         tk.Label(words, text="Order Lifecycle Delivery", bg=CARD, fg=FAINT, font=(FONT, 8)).pack(anchor="w")
 
         def page(pad=True):
-            return tk.Frame(content_host, background=CARD, padx=8 if pad else 0, pady=4 if pad else 0)
+            return tk.Frame(content_host, background=BG)
 
         overview, explorer, ask = page(), page(), page(False)
         rtdd, assign = page(), page()
@@ -735,52 +735,59 @@ class App(tk.Tk):
             self.log_frame.pack_forget()
             self.log_toggle.configure(text="Show activity ▲")
         else:
-            self.log_frame.pack(side="bottom", fill="x", pady=(0, 6))
+            self.log_frame.pack(side="bottom", fill="x", padx=(12, 18))
             self.log_toggle.configure(text="Hide activity ▼")
+
+    def _tile(self, parent, pad=10, **pack):
+        """A rounded white tile; widgets go in its .body. Packed when pack options are given."""
+        t = gui.Tile(parent, pad=pad)
+        if pack:
+            t.pack(**pack)
+        return t
 
     def _build_explorer(self, f):
         # Order bar
-        bar = tk.Frame(f, background=CARD)
-        bar.pack(fill="x", pady=(0, 10))
-        ttk.Label(bar, text="Order #", style="CardHead.TLabel").pack(side="left")
+        top = self._tile(f, pad=6, fill="x")
+        bar = top.body
+        tk.Label(bar, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 13)).pack(side="left", padx=(4, 8))
         self.order_var = tk.StringVar()
         ent = ttk.Entry(bar, textvariable=self.order_var, width=16, font=(FONT, 12))
-        ent.pack(side="left", padx=(8, 8))
+        ent.pack(side="left", padx=(0, 8))
         ent.bind("<Return>", lambda e: self.open_order())
         ent.focus_set()
         self._btn(bar, "Open order", self.open_order, "Accent.TButton").pack(side="left")
-        self.order_label = ttk.Label(bar, text="", style="CardMuted.TLabel")
+        self.order_label = tk.Label(bar, text="Type an order number, e.g. 10-1771012", bg=CARD, fg=MUTED,
+                                    font=(FONT, 9))
         self.order_label.pack(side="left", padx=16)
-        tk.Frame(f, background=LINE, height=1).pack(fill="x", pady=(0, 10))
 
         main = ttk.Panedwindow(f, orient="horizontal")
         main.pack(fill="both", expand=True)
 
-        left = tk.Frame(main, background=CARD, padx=0)
-        ttk.Label(left, text="ORDER TABS", style="CardMuted.TLabel",
-                  font=(FONT, 8, "bold")).pack(anchor="w", pady=(0, 6))
-        self.tab_list = tk.Listbox(left, width=22, activestyle="none", font=(FONT, 10),
-                                   selectbackground=ORANGE, selectforeground="white",
-                                   background="#FAFAFA", foreground=INK, borderwidth=0,
-                                   highlightthickness=1, highlightbackground=LINE,
-                                   highlightcolor=LINE, relief="flat")
+        lt = self._tile(main)
+        left = lt.body
+        tk.Label(left, text="ORDER TABS", bg=CARD, fg=FAINT, font=(FONT, 8, "bold")).pack(anchor="w", pady=(0, 6))
+        self.tab_list = tk.Listbox(left, width=20, activestyle="none", font=(FONT, 10),
+                                   selectbackground=ORANGE_SOFT, selectforeground=ORANGE_DARK,
+                                   background=CARD, foreground=INK, borderwidth=0,
+                                   highlightthickness=0, relief="flat")
         self.tab_list.pack(fill="both", expand=True)
         self.tab_list.bind("<<ListboxSelect>>", lambda e: self._tab_clicked())
-        main.add(left, weight=0)
+        main.add(lt, weight=0)
 
-        right = tk.Frame(main, background=CARD, padx=14)
-        main.add(right, weight=1)
+        rt = self._tile(main)
+        right = rt.body
+        main.add(rt, weight=1)
         head = tk.Frame(right, background=CARD)
         head.pack(fill="x")
-        self.tab_title = ttk.Label(head, text="Open an order to start", style="CardHead.TLabel",
+        self.tab_title = ttk.Label(head, text="No order open", style="CardHead.TLabel",
                                    font=(FONT, 13, "bold"))
-        self.tab_title.pack(side="left")
-        self.b_all = self._btn(head, "Export all tabs", self.export_all)
+        self.b_all = self._btn(head, "⤓  All tabs", self.export_all)
         self.b_all.pack(side="right")
-        self.b_xls = self._btn(head, "Export tab to Excel", self.export_tab)
+        self.b_xls = self._btn(head, "⤓  This tab", self.export_tab)
         self.b_xls.pack(side="right", padx=6)
-        self.b_shot = self._btn(head, "📷  Screenshot", self.screenshot)
+        self.b_shot = self._btn(head, "Screenshot", self.screenshot)
         self.b_shot.pack(side="right")
+        self.tab_title.pack(side="left")  # after the buttons: they keep their size
 
         self.content = tk.Frame(right, background=CARD, pady=8)
         self.content.pack(fill="both", expand=True)
@@ -880,7 +887,8 @@ class App(tk.Tk):
               "Green": ("#1E7B34", "#E4F4E8"), "No date": ("#595959", "#EFEFEF")}
 
     def _build_overview_tab(self, f):
-        bar = tk.Frame(f, background=CARD, pady=4)
+        top = self._tile(f, pad=6, fill="x")
+        bar = tk.Frame(top.body, background=CARD)
         bar.pack(fill="x")
         self.ov_input = tk.StringVar()
         ent = ttk.Entry(bar, textvariable=self.ov_input, width=20, font=(FONT, 11))
@@ -890,29 +898,30 @@ class App(tk.Tk):
         self._btn(bar, "↻  Refresh", lambda: self._ov_run(refresh=True)).pack(side="left", padx=(6, 0))
         self.ov_export_btn = self._btn(bar, "⤓  Export to Excel", self._ov_export)
         self.ov_export_btn.pack(side="left", padx=(6, 0))
-        tk.Label(f, text="One or more GOLD orders, separated by spaces or commas.  Status against the revised "
-                         f"(or initial) target date: Red = passed, Amber = {go.AMBER_DAYS} days or less, "
-                         "Green = more.", bg=CARD, fg=FAINT, font=(FONT, 8), anchor="w", justify="left",
-                 wraplength=900).pack(fill="x", pady=(4, 10))
+        tk.Label(top.body, text="One or more GOLD orders, separated by spaces or commas.  Status against the "
+                                f"revised (or initial) target date: Red = passed, Amber = {go.AMBER_DAYS} days "
+                                "or less, Green = more.", bg=CARD, fg=FAINT, font=(FONT, 8), anchor="w",
+                 justify="left", wraplength=900).pack(fill="x", pady=(6, 0))
 
         # Summary of all orders shown: colourful counters
-        strip = tk.Frame(f, background=CARD)
-        strip.pack(fill="x", pady=(0, 12))
+        strip = tk.Frame(f, background=BG)
+        strip.pack(fill="x", padx=6, pady=(4, 6))
         self.ov_summary = {}
         for col, (key, caption, icon, palette) in enumerate((
                 ("all", "Orders", "", "lavender"), ("Green", "On track", "", "mint"),
                 ("Amber", "Due soon", "", "amber"), ("Red", "Late", "", "rose"))):
             card = gui.StatCard(strip, caption, icon, palette, sub_lines=1, big_size=22)
-            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 10, 0))
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
             strip.columnconfigure(col, weight=1, uniform="ovsum")
             self.ov_summary[key] = card
         self._ov_summary_set({})
 
         body = ttk.Panedwindow(f, orient="horizontal")
         body.pack(fill="both", expand=True)
-        left = tk.Frame(body, background=CARD)
+        lt = self._tile(body)
+        left = lt.body
         tk.Label(left, text="ORDERS", bg=CARD, fg=FAINT, font=(FONT, 8, "bold")).pack(anchor="w", pady=(0, 6))
-        lf = tk.Frame(left, background=CARD, highlightthickness=1, highlightbackground=LINE)
+        lf = tk.Frame(left, background=CARD)
         lf.pack(fill="both", expand=True)
         self.ov_list = ttk.Treeview(lf, columns=("order", "status", "days", "lead"), show="headings",
                                     selectmode="browse")
@@ -925,10 +934,11 @@ class App(tk.Tk):
         self.ov_list.tag_configure("err", foreground=RED)
         self.ov_list.pack(fill="both", expand=True)
         self.ov_list.bind("<<TreeviewSelect>>", lambda e: self._ov_show_selected())
-        body.add(left, weight=2)
+        body.add(lt, weight=2)
 
-        right = tk.Frame(body, background=CARD, padx=16)
-        body.add(right, weight=5)
+        rt = self._tile(body)
+        right = rt.body
+        body.add(rt, weight=5)
 
         def place_sash(e=None):  # room for the order list (~ a third), once the page has its size
             if body.winfo_width() > 600:
@@ -946,7 +956,7 @@ class App(tk.Tk):
                                                     ("delivery", "Delivery status", ""),
                                                     ("lead", "120-day lead time", ""))):
             card = gui.StatCard(cards, caption, icon, "sun" if key == "value" else "grey", sub_lines=2,
-                                big_size=20)
+                                big_size=20, bg=CARD)
             card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 10, 0))
             cards.columnconfigure(col, weight=1, uniform="ovcards")
             self.ov_cards[key] = card
@@ -1273,10 +1283,11 @@ class App(tk.Tk):
 
     # ----- Revised Target Date tab
     def _build_rtdd_tab(self, f):
-        ttk.Label(f, text="Adds a 'Revised Target Date' milestone (Milestones > Create new) to each order "
-                          "in the table, with its Target Date and reason.", style="Muted.TLabel",
+        top = self._tile(f, fill="x").body
+        ttk.Label(top, text="Adds a 'Revised Target Date' milestone (Milestones > Create new) to each order "
+                            "in the table, with its Target Date and reason.", style="Muted.TLabel",
                   wraplength=900, justify="left").pack(anchor="w")
-        opts = tk.Frame(f, background=CARD, pady=10)
+        opts = tk.Frame(top, background=CARD, pady=10)
         opts.pack(fill="x")
         ttk.Label(opts, text="Reason type").grid(row=0, column=0, sticky="w")
         self.rtdd_kind = tk.StringVar(value="Customer")
@@ -1302,6 +1313,7 @@ class App(tk.Tk):
             except ValueError:
                 return str(v)
 
+        f = self._tile(f, fill="both", expand=True).body  # the table and its buttons in their own tile
         self._grid_toolbar(f, "Orders to update",
                            "click a cell to type  ·  Ctrl+V pastes rows from Excel  ·  Delete clears rows",
                            "rtdd_grid")
@@ -1389,10 +1401,11 @@ class App(tk.Tk):
         return gn.full_name(e) if e else " ".join(str(value).split())
 
     def _build_assign_tab(self, f):
-        ttk.Label(f, text="Makes the chosen DPM the primary STM of each order (Teams > Manage Teams > STM), "
-                          "then saves the teams. Pick names from the list - manage it in the DPM Names tab.",
+        top = self._tile(f, fill="x").body
+        ttk.Label(top, text="Makes the chosen DPM the primary STM of each order (Teams > Manage Teams > STM), "
+                            "then saves the teams. Pick names from the list - manage it in the DPM Names tab.",
                   style="Muted.TLabel", wraplength=900, justify="left").pack(anchor="w")
-        opts = tk.Frame(f, background=CARD, pady=10)
+        opts = tk.Frame(top, background=CARD, pady=10)
         opts.pack(fill="x")
         ttk.Label(opts, text="For empty cells use", style="Muted.TLabel").pack(side="left")
         self.assign_default = tk.StringVar()
@@ -1406,6 +1419,7 @@ class App(tk.Tk):
                                              if typed else [""] + self._dpm_choices())
         self.assign_default_cb.bind("<KeyRelease>", filter_default)
 
+        f = self._tile(f, fill="both", expand=True).body  # the table and its buttons in their own tile
         self._grid_toolbar(f, "Orders to assign",
                            "click a cell to type  ·  type in the DPM cell to filter names  ·  Ctrl+V pastes from Excel",
                            "assign_grid")
@@ -1472,11 +1486,12 @@ class App(tk.Tk):
 
     # ----- DPM Names tab
     def _build_names_tab(self, f):
-        ttk.Label(f, text="The DPMs (STMs) offered in Bulk Order Assignment, with their names as they appear in "
-                          "GOLD. Add, edit or remove names; the list is saved on this computer.",
+        top = self._tile(f, fill="x").body
+        ttk.Label(top, text="The DPMs (STMs) offered in Order assignment, with their names as they appear in "
+                            "GOLD. Add, edit or remove names; the list is saved on this computer.",
                   style="Muted.TLabel", wraplength=900, justify="left").pack(anchor="w")
-        tb = tk.Frame(f, background=CARD, pady=10)
-        tb.pack(fill="x")
+        tb = tk.Frame(top, background=CARD)
+        tb.pack(fill="x", pady=(10, 0))
         self._btn(tb, "+ Add name", self._names_add, "Accent.TButton").pack(side="left")
         self._btn(tb, "Edit", self._names_edit).pack(side="left", padx=6)
         self._btn(tb, "Delete", self._names_delete).pack(side="left")
@@ -1489,7 +1504,8 @@ class App(tk.Tk):
         self._btn(tb, "Export to Excel", self._names_export).pack(side="right")
         self._btn(tb, "Import Excel/CSV...", self._names_import).pack(side="right", padx=6)
 
-        lf = tk.Frame(f, background=CARD, highlightthickness=1, highlightbackground=LINE)
+        f = self._tile(f, fill="both", expand=True).body
+        lf = tk.Frame(f, background=CARD)
         lf.pack(fill="both", expand=True)
         cols = ("name", "first", "last", "user", "check")
         self.names_tree = ttk.Treeview(lf, columns=cols, show="headings", selectmode="extended")
@@ -1732,9 +1748,8 @@ class App(tk.Tk):
             d.switch_to.window(back)
 
     def _build_org_tab(self, f):
-        f.configure(padx=0, pady=0)
-        bar = tk.Frame(f, background=CARD, padx=20, pady=12)
-        bar.pack(fill="x")
+        bar = self._tile(f, pad=6, fill="x").body
+        tk.Label(bar, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 13)).pack(side="left", padx=(4, 8))
         self.oc_query = tk.StringVar()
         ent = ttk.Entry(bar, textvariable=self.oc_query, width=34, font=(FONT, 11))
         ent.pack(side="left")
@@ -1746,8 +1761,9 @@ class App(tk.Tk):
         self.oc_team_btn.pack(side="right", padx=(0, 8))
 
         panes = ttk.Panedwindow(f, orient="horizontal")
-        panes.pack(fill="both", expand=True, padx=20, pady=(0, 14))
-        left = tk.Frame(panes, background=CARD)
+        panes.pack(fill="both", expand=True)
+        lt = self._tile(panes)
+        left = lt.body
         self.oc_title = tk.Label(left, text="", bg=CARD, fg=MUTED, font=(FONT, 9, "bold"), anchor="w")
         self.oc_title.pack(fill="x", pady=(0, 6))
         tf = tk.Frame(left, background=CARD)
@@ -1764,9 +1780,10 @@ class App(tk.Tk):
         sb.pack(side="right", fill="y")
         self.oc_tree.pack(side="left", fill="both", expand=True)
         self.oc_tree.bind("<<TreeviewSelect>>", lambda e: self._oc_show())
-        panes.add(left, weight=3)
-        self.oc_card = tk.Frame(panes, background=CARD, padx=18)
-        panes.add(self.oc_card, weight=2)
+        panes.add(lt, weight=3)
+        ct = self._tile(panes, pad=14)
+        self.oc_card = ct.body
+        panes.add(ct, weight=2)
 
         def place_sash(e=None):  # give the person card ~430 px, once the tab has its real size
             if panes.winfo_width() > 900:
@@ -1930,7 +1947,7 @@ class App(tk.Tk):
         self.log("Copied.")
 
     # ----- Ask GOLD tab (AI assistant)
-    CHAT_BG = "#FAF8F5"
+    CHAT_BG = CARD
     ASK_INDENT = 40  # answers line up under the assistant's name, right of its avatar
     # (title, description, question) - "{order}" is the order open in the Order explorer
     ASK_SUGGESTIONS = (("Deadlines", "Target dates, milestones, lead time",
@@ -1944,39 +1961,44 @@ class App(tk.Tk):
 
     def _build_ask_tab(self, f):
         self.ask_frame = f
-        f.configure(padx=0, pady=0)
-        # Header: title + what it does | order in context, New chat
-        head = tk.Frame(f, background=CARD, padx=20, pady=10)
+        f = self._tile(f, pad=8, fill="both", expand=True).body  # the whole chat in one rounded tile
+        # Header: what it does | order in context, New chat
+        head = tk.Frame(f, background=CARD, padx=12, pady=4)
         head.pack(fill="x")
-        tk.Label(head, text="Reads GOLD and the Org Chart live for you - it never changes anything.", bg=CARD,
-                 fg=MUTED, font=(FONT, 9)).pack(side="left")
+        self.ask_hint = tk.Label(head, text="Reads GOLD and the Org Chart live for you - it never changes "
+                                            "anything.", bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w")
+        self.ask_hint.pack(side="left", fill="x", expand=True)
         self._btn(head, "＋  New chat", self._ask_new).pack(side="right")
-        self.ask_chip = tk.Label(head, bg=ORANGE_SOFT, fg=ORANGE_DARK, font=(FONT, 9, "bold"), padx=10, pady=4)
-        tk.Frame(f, background=LINE, height=1).pack(fill="x")
+        self.ask_chip = gui.Pill(head, "", ORANGE_DARK, ORANGE_SOFT, bg=CARD)
 
-        # Composer (bottom)
-        foot = tk.Frame(f, background=CARD, padx=20, pady=12)
+        # Composer (bottom): a rounded field with a round send button
+        foot = tk.Frame(f, background=CARD, padx=8, pady=4)
         foot.pack(side="bottom", fill="x")
-        tk.Frame(f, background=LINE, height=1).pack(side="bottom", fill="x")
-        box = tk.Frame(foot, background=CARD, highlightthickness=1, highlightbackground="#CFD3D9",
-                       highlightcolor=ORANGE)
-        box.pack(fill="x")
-        self.ask_send = tk.Label(box, text="", bg=ORANGE, fg="white", font=(gui.ICONS, 13), width=4,
-                                 cursor="hand2")
-        self.ask_send.pack(side="right", fill="y", padx=6, pady=6)  # packed first: always visible
-        self.ask_input = tk.Text(box, height=2, wrap="word", font=(FONT, 11), relief="flat", padx=12, pady=10,
-                                 background=CARD, foreground=INK, insertbackground=INK, highlightthickness=0,
+        comp = gui.Tile(foot, radius=20, pad=2, bg=CARD, fill="#FBFAF8", shadow=False, outline="#E3DED6")
+        comp.pack(fill="x")
+        box = comp.body
+        self._send_imgs = {s: ImageTk.PhotoImage(gui.rounded_image(42, 42, 21, c), master=self)
+                           for s, c in (("on", ORANGE), ("hover", ORANGE_DARK), ("off", "#F9CBA0"))}
+        self.ask_send = tk.Label(box, image=self._send_imgs["on"], text="", compound="center",
+                                 fg="white", font=(gui.ICONS, 12), bg="#FBFAF8", cursor="hand2", bd=0)
+        self.ask_send.pack(side="right", padx=(6, 2))  # packed first: always visible
+        self.ask_send.bind("<Enter>", lambda e: self.busy or self.ask_send.configure(image=self._send_imgs["hover"]))
+        self.ask_send.bind("<Leave>", lambda e: self.busy or self.ask_send.configure(image=self._send_imgs["on"]))
+        self.ask_input = tk.Text(box, height=2, wrap="word", font=(FONT, 11), relief="flat", padx=8, pady=6,
+                                 background="#FBFAF8", foreground=INK, insertbackground=INK, highlightthickness=0,
                                  borderwidth=0)
         self.ask_input.pack(side="left", fill="both", expand=True)
         self.ask_send.bind("<Button-1>", lambda e: self._ask_send())
-        self.ask_placeholder = tk.Label(box, bg=CARD, fg="#9CA3AF", font=(FONT, 11), cursor="xterm")
-        self.ask_placeholder.place(x=14, y=10)
+        self.ask_placeholder = tk.Label(box, bg="#FBFAF8", fg="#9CA3AF", font=(FONT, 11), cursor="xterm")
+        self.ask_placeholder.place(x=10, y=6)
         self.ask_placeholder.bind("<Button-1>", lambda e: self.ask_input.focus_set())
         self.ask_input.bind("<Return>", lambda e: (self._ask_send(), "break")[1])
         self.ask_input.bind("<Shift-Return>", lambda e: None)
         self.ask_input.bind("<KeyRelease>", lambda e: self._ask_input_changed())
-        self.ask_input.bind("<FocusIn>", lambda e: box.configure(highlightbackground=ORANGE))
-        self.ask_input.bind("<FocusOut>", lambda e: box.configure(highlightbackground="#CFD3D9"))
+        comp_outline = {True: ORANGE, False: "#E3DED6"}
+        for ev, on in (("<FocusIn>", True), ("<FocusOut>", False)):
+            self.ask_input.bind(ev, lambda e, on=on: (setattr(comp, "outline", comp_outline[on]),
+                                                       setattr(comp, "_size", None), comp._soon()))
         hints = tk.Frame(foot, background=CARD)
         hints.pack(fill="x", pady=(6, 0))
         self.ask_status = tk.Label(hints, text="", bg=CARD, fg=MUTED, font=(FONT, 8))
@@ -1988,7 +2010,7 @@ class App(tk.Tk):
         body = tk.Frame(f, background=self.CHAT_BG)
         body.pack(fill="both", expand=True)
         self.ask_text = tk.Text(body, wrap="word", relief="flat", background=self.CHAT_BG, foreground=INK,
-                                padx=28, pady=18, cursor="arrow", state="disabled", font=(FONT, 10),
+                                padx=20, pady=10, cursor="arrow", state="disabled", font=(FONT, 10),
                                 highlightthickness=0, borderwidth=0, selectbackground=ORANGE_SOFT,
                                 selectforeground=INK, inactiveselectbackground=ORANGE_SOFT)
         sb = ttk.Scrollbar(body, orient="vertical", command=self.ask_text.yview)
@@ -2036,8 +2058,10 @@ class App(tk.Tk):
     def _ask_refresh_chip(self):
         order = self._ask_context_order()
         if order:
-            self.ask_chip.configure(text=f"Order in view:  {order}")
+            self.ask_chip.set(f"Order in view:  {order}")
             self.ask_chip.pack(side="right", padx=(0, 12))
+            self.ask_hint.pack_forget()  # packed again last: the pill keeps its size, the hint gets the rest
+            self.ask_hint.pack(side="left", fill="x", expand=True)
         else:
             self.ask_chip.pack_forget()
         self._ask_input_changed()
@@ -2073,8 +2097,11 @@ class App(tk.Tk):
         self._ask_write(clear)
 
     def _ask_avatar(self, t):
-        t.window_create("end", window=tk.Label(t, text="GX", bg=ORANGE, fg="white", font=(FONT, 8, "bold"),
-                                               width=3, pady=2), padx=0)
+        if not getattr(self, "_avatar_img", None):
+            self._avatar_img = self._asset_image("logo_28.png")
+        t.window_create("end", window=tk.Label(t, image=self._avatar_img, bg=self.CHAT_BG, bd=0)
+                        if self._avatar_img else tk.Label(t, text="GX", bg=ORANGE, fg="white",
+                                                          font=(FONT, 8, "bold"), width=3, pady=2))
         t.insert("end", "   ", ("who",))
 
     # --- welcome screen with suggestions
@@ -2093,20 +2120,12 @@ class App(tk.Tk):
                              if order else "Ask about any GOLD order - type its number in your question.")
                      + "\n", ("sub",))
             grid = tk.Frame(t, background=self.CHAT_BG)
+            card_w = min(380, max(330, (t.winfo_width() - 120) // 2))
             for i, (title, desc, q) in enumerate(self.ASK_SUGGESTIONS):
-                card = tk.Frame(grid, background=CARD, highlightthickness=1, highlightbackground=LINE,
-                                padx=14, pady=10, cursor="hand2")
-                card.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
-                a = tk.Label(card, text=title, bg=CARD, fg=INK, font=(FONT, 10, "bold"), anchor="w", width=30,
-                             cursor="hand2")
-                b = tk.Label(card, text=desc, bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w", cursor="hand2")
-                a.pack(fill="x")
-                b.pack(fill="x")
                 question = q.format(order=order or "10-1234567")
-                for w in (card, a, b):
-                    w.bind("<Button-1>", lambda e, q=question: self._ask_suggestion(q))
-                    w.bind("<Enter>", lambda e, c=card: c.configure(highlightbackground=ORANGE))
-                    w.bind("<Leave>", lambda e, c=card: c.configure(highlightbackground=LINE))
+                card = gui.ClickCard(grid, title, desc, lambda q=question: self._ask_suggestion(q),
+                                     bg=self.CHAT_BG, width=card_w)
+                card.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
             t.window_create("end", window=grid)
             t.tag_add("center", "end-2c")
             t.insert("end", "\n", ("center",))
@@ -2139,9 +2158,7 @@ class App(tk.Tk):
             t.mark_gravity("question", "left")
             t.insert("end", f"You · {stamp}\n", ("right", "meta"))
             width = max(300, int(t.winfo_width() * 0.62))
-            bubble = tk.Label(t, text=question, bg=ORANGE, fg="white", font=(FONT, 10), justify="left",
-                              wraplength=width, padx=14, pady=9, anchor="w")
-            t.window_create("end", window=bubble)
+            t.window_create("end", window=gui.Bubble(t, question, width, bg=self.CHAT_BG))
             t.tag_add("right", "end-2c")
             t.insert("end", "\n", ("right",))
         self._ask_write(write)
@@ -2211,7 +2228,7 @@ class App(tk.Tk):
             self._ask_clear()
         self._ask_user_message(question)
         self._ask_thinking("Thinking")
-        self.ask_send.configure(bg="#F7C49A", cursor="watch")
+        self.ask_send.configure(image=self._send_imgs["off"], cursor="watch")
         chosen = self.ai_key_file.get().strip()
         order = self._ask_context_order()
         context = ""
@@ -2253,7 +2270,7 @@ class App(tk.Tk):
 
         def done(result):
             ok, answer = result
-            self.ask_send.configure(bg=ORANGE, cursor="hand2")
+            self.ask_send.configure(image=self._send_imgs["on"], cursor="hand2")
             self._ask_answer(answer, ok)
             self.ask_input.focus_set()
 

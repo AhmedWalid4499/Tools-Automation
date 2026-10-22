@@ -1,5 +1,13 @@
 # GOLD Express - what's new
 
+## 2.1.0
+- **Softer, rounder design.** Every page is now made of separate rounded tiles with a soft shadow.
+- Pill-shaped buttons, rounded fields and drop-downs, rounded selectors and checkboxes, and slim
+  rounded scrollbars.
+- The side menu highlights the current page with a rounded pill; the status is a rounded badge.
+- Ask GOLD: rounded chat bubbles, rounded suggestion cards, and a rounded message box with a round
+  send button.
+
 ## 2.0.1
 - Fixed: on some company networks the update check said "You have the latest version" although a
   newer one was published. It now tries three ways to read GitHub and says so when it cannot,

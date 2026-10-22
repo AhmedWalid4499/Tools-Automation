@@ -15,8 +15,7 @@ ORDER_RE = re.compile(r"\s*\d{2}-\d+")
 
 class EditGrid(tk.Frame):
     def __init__(self, parent, columns, on_change=None, start_rows=15, **kw):
-        super().__init__(parent, background="white", highlightthickness=1,
-                         highlightbackground="#E2E4E8", **kw)
+        super().__init__(parent, background="white", highlightthickness=0, **kw)  # sits in a rounded tile
         self.cols = columns
         self.keys = [c["key"] for c in columns]
         self.all_keys = ["n"] + self.keys + ["status"]
