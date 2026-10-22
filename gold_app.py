@@ -29,6 +29,7 @@ import gold_extract as gx
 import gold_markdown as gmd
 import gold_milestones as gm
 import gold_myorders as gmo
+import gold_notify as gnotify
 import gold_names as gn
 import gold_orgchart as goc
 import gold_overview as go
@@ -43,6 +44,7 @@ from version import AUTHOR, __version__
 SETTINGS_FILE = HERE / "gold_app_settings.json"
 AI_KEY_CACHE = HERE / "ai_key.bin"  # the team's AI key, encrypted for this Windows user
 OC_CACHE = HERE / "orgchart_cache.json"  # Org Chart lookups of GOLD team members (kept 7 days)
+MY_SNAPSHOT = HERE / "my_orders_snapshot.json"  # last My orders read, to notice changes
 
 # Palette (warm light background, white rounded panels, orange accent) - see gold_ui
 ORANGE = gui.ORANGE
@@ -70,7 +72,10 @@ def safe_name(s):
 def load_settings():
     s = {"screenshots": str(HERE / "output" / "screenshots"), "exports": str(HERE / "output"),
          "full_page": True, "auto_shot": False, "per_order_folder": True, "show_browser": False,
-         "parallel_sessions": True, "ai_key_file": ""}
+         "parallel_sessions": True, "ai_key_file": "",
+         # Windows notifications
+         "notify_on": True, "notify_orders": True, "notify_every": "30", "notify_digest": True,
+         "notify_updates": True, "notify_tasks": True, "notified_version": "", "digest_date": ""}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -139,6 +144,7 @@ class Worker:
             label, fn, done, retry = self.jobs.get()
             if fn is None:
                 break
+            started = time.time()
             try:
                 try:
                     result = fn()
@@ -150,9 +156,11 @@ class Worker:
                     self.restart = True
                     result = fn()
                 self.app.ui(lambda r=result: (self.app.set_idle(), done and done(r)))
+                self.app.ui(lambda label=label, t=time.time() - started: self.app._task_done(label, t, True))
             except Exception as e:
                 tb = traceback.format_exc()
                 self.app.ui(lambda e=e, tb=tb, label=label: self.app.job_failed(label, e, tb))
+                self.app.ui(lambda label=label, t=time.time() - started: self.app._task_done(label, t, False))
 
     def session_problem(self, err):
         """Did this failure come from a lost connection / expired GOLD session?"""
@@ -286,6 +294,7 @@ class Worker:
 
 class App(tk.Tk):
     def __init__(self):
+        gnotify.set_app_id()  # before the window exists: taskbar + notifications as GOLD Express
         super().__init__()
         self.title(APP_NAME)
         for icon in (BUNDLE_DIR / "gold_express.ico", Path(__file__).parent / "gold_express.ico"):
@@ -315,6 +324,12 @@ class App(tk.Tk):
         self.show_browser = tk.BooleanVar(value=self.settings["show_browser"])
         self.parallel = tk.BooleanVar(value=self.settings["parallel_sessions"])
         self.ai_key_file = tk.StringVar(value=self.settings["ai_key_file"])
+        self.notify_on = tk.BooleanVar(value=self.settings["notify_on"])
+        self.notify_orders = tk.BooleanVar(value=self.settings["notify_orders"])
+        self.notify_every = tk.StringVar(value=str(self.settings["notify_every"]))
+        self.notify_digest = tk.BooleanVar(value=self.settings["notify_digest"])
+        self.notify_updates = tk.BooleanVar(value=self.settings["notify_updates"])
+        self.notify_tasks = tk.BooleanVar(value=self.settings["notify_tasks"])
         self.chat = None           # Ask GOLD conversation (gold_ai.Chat)
 
         self._style()
@@ -328,6 +343,11 @@ class App(tk.Tk):
         self.after(4000, lambda: self._check_updates(quiet=True))  # quiet check at start-up
         # Sign in to GOLD right away, in the background, so the first action doesn't wait for it.
         self.after(300, self._prewarm)
+        # Background check of My orders for notifications (only while the user is not working in the app)
+        self._last_input = time.time()
+        for ev in ("<Any-KeyPress>", "<Any-Button>"):
+            self.bind_all(ev, lambda e: setattr(self, "_last_input", time.time()), add="+")
+        self.after(60_000, self._my_watch)
 
     def _prewarm(self):
         if self.busy or self.worker.driver is not None:
@@ -391,81 +411,186 @@ class App(tk.Tk):
                 rel, newer = gu.check()
             except Exception as e:
                 if not quiet:
-                    self.ui(lambda e=e: messagebox.showwarning(
-                        APP_NAME, f"Could not check for updates:\n{e}\n\nYou can also download new "
-                                  f"versions from\n{gu.RELEASES_PAGE}"))
+                    self.ui(lambda e=e: self._message(
+                        "Updates", "Could not check for updates",
+                        f"{str(e).splitlines()[0][:160]}\n\nYou can also download new versions from "
+                        f"{gu.RELEASES_PAGE}", icon=""))
                 return
             if newer:
                 self.new_release = rel
-                self.ui(lambda: self.update_btn.configure(text=f"⬆  Update to {rel['version']}",
+                self.ui(lambda: self.update_btn.configure(text=f"↑  Update to {rel['version']}",
                                                           style="Accent.TButton"))
                 self.log(f"A new version of {APP_NAME} is available: {rel['version']}")
+                if self.settings.get("notified_version") != rel["version"]:  # once per version
+                    self.settings["notified_version"] = rel["version"]
+                    self.ui(lambda: (save_settings(self.settings), self._notify(
+                        f"GOLD Express {rel['version']} is available",
+                        "Click Update in GOLD Express's side menu to install it.", "updates")))
                 if not quiet:
                     self.ui(lambda: self._offer_update(rel))
             elif not quiet:
-                self.ui(lambda: messagebox.showinfo(
-                    APP_NAME, f"You have the latest version ({__version__}).\n\n"
-                              f"Newest version on GitHub: {rel['version'] if rel else '?'}"))
+                self.ui(lambda: self._message(
+                    "Updates", "You're up to date",
+                    f"GOLD Express {__version__} is the newest version "
+                    f"(newest on GitHub: {rel['version'] if rel else '?'}).", icon=""))
         threading.Thread(target=work, daemon=True).start()
 
     def _offer_update(self, rel):
         if getattr(self, "_updating", False):
-            return  # the update question is open, or the update is downloading
+            if getattr(self, "_update_win", None) and self._update_win.winfo_exists():
+                self._update_win.lift()  # the update window is already open
+            return
         if self.busy:  # e.g. still connecting to GOLD: offer the update as soon as that has finished
             if not getattr(self, "_update_waiting", False):
                 self._update_waiting = True
-                self.update_btn.configure(text="⬆  Update when ready...")
+                self.update_btn.configure(text="↑  Update when ready...")
                 self.log("The update will start as soon as the current action has finished.")
                 self._update_when_idle(rel)
             return
+        if not gu.can_self_update():
+            self._message("Update available", f"Version {rel['version']} is available.",
+                          "This copy runs from the source code - update it with 'git pull'.\n\n"
+                          f"{gu.RELEASES_PAGE}", icon="")
+            return
         self._updating = True
-        started = False
-        try:
-            started = self._offer_update_now(rel)
-        finally:
-            if not started:  # answered No / not possible: the button works again
-                self._updating = False
+        self._update_dialog(rel)
 
     def _update_when_idle(self, rel):
         if self.busy:
             self.after(500, self._update_when_idle, rel)
             return
         self._update_waiting = False
-        self.update_btn.configure(text=f"⬆  Update to {rel['version']}")
+        self.update_btn.configure(text=f"↑  Update to {rel['version']}")
         self._offer_update(rel)
 
-    def _offer_update_now(self, rel):
-        """True when the download has started."""
-        notes = rel["notes"][:900] + ("..." if len(rel["notes"]) > 900 else "")
-        if not gu.can_self_update():
-            messagebox.showinfo(APP_NAME, f"Version {rel['version']} is available.\n\nThis copy runs from the "
-                                          f"source code - update it with 'git pull'.\n\n{gu.RELEASES_PAGE}")
-            return False
-        if not messagebox.askyesno(
-                f"{APP_NAME} update",
-                f"Version {rel['version']} is available (you have {__version__}).\n\n"
-                + (f"What's new:\n{notes}\n\n" if notes else "")
-                + f"Update now? {APP_NAME} will close, update itself and open again "
-                  "(about a minute). Your settings and files are kept."):
-            return False
+    # ----- app-styled small windows
+    def _dialog(self, title, width=560):
+        """A small window in the app's style: a rounded white tile on the warm background.
+        Returns (window, body frame)."""
+        win = tk.Toplevel(self, background=BG)
+        win.title(f"{APP_NAME} - {title}")
+        win.transient(self)
+        win.resizable(False, False)
+        tile = gui.Tile(win, pad=14, radius=20)
+        tile.pack(fill="both", expand=True, padx=10, pady=10)
+        tile.body.configure(width=int(width * self.winfo_fpixels("1i") / 96))
+        return win, tile.body
+
+    def _place_dialog(self, win):
+        win.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - win.winfo_reqwidth()) // 2
+        y = self.winfo_rooty() + max(40, (self.winfo_height() - win.winfo_reqheight()) // 3)
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        win.lift()
+        win.focus_force()
+
+    def _dialog_head(self, body, title, sub, icon="", badge=None):
+        head = tk.Frame(body, background=CARD)
+        head.pack(fill="x")
+        logo = self._asset_image("logo_48.png")
+        if logo:
+            lab = tk.Label(head, image=logo, bg=CARD)
+            lab.image = logo
+        else:
+            lab = tk.Label(head, text=icon, bg=CARD, fg=ORANGE, font=(gui.ICONS, 22))
+        lab.pack(side="left", padx=(0, 14))
+        words = tk.Frame(head, background=CARD)
+        words.pack(side="left", fill="x", expand=True)
+        tk.Label(words, text=title, bg=CARD, fg=INK, font=(FONT, 14, "bold"), anchor="w").pack(fill="x")
+        tk.Label(words, text=sub, bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w", justify="left",
+                 wraplength=420).pack(fill="x")
+        if badge:
+            gui.Pill(head, badge, ORANGE_DARK, ORANGE_SOFT, bg=CARD).pack(side="right", anchor="n")
+        return head
+
+    def _message(self, title, heading, text, icon="", button="OK"):
+        """An app-styled message with one button (replaces plain Windows message boxes)."""
+        win, body = self._dialog(title, width=460)
+        self._dialog_head(body, heading, text, icon)
+        row = tk.Frame(body, background=CARD)
+        row.pack(fill="x", pady=(16, 0))
+        ttk.Button(row, text=button, style="Accent.TButton", command=win.destroy).pack(side="right")
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.bind("<Return>", lambda e: win.destroy())
+        self._place_dialog(win)
+        return win
+
+    # ----- the update window
+    def _update_dialog(self, rel):
+        win, body = self._dialog("Update", width=560)
+        self._update_win = win
+        self._dialog_head(body, "A new version is ready",
+                          f"GOLD Express {rel['version']}  ·  you have {__version__}", "",
+                          badge=f"v{rel['version']}")
+        tk.Label(body, text="WHAT'S NEW", bg=CARD, fg=FAINT, font=(FONT, 8, "bold"), anchor="w").pack(
+            fill="x", pady=(16, 4))
+        notes = tk.Text(body, height=9, wrap="word", relief="flat", background="#FBFAF8", foreground=INK,
+                        padx=12, pady=8, highlightthickness=1, highlightbackground=LINE, borderwidth=0,
+                        font=(FONT, 9), cursor="arrow")
+        notes.pack(fill="both", expand=True)
+        gmd.setup(notes, font=FONT, ink=INK, muted=MUTED, accent=ORANGE, soft=ORANGE_SOFT, line=LINE, size=9)
+        gmd.render(notes, rel.get("notes") or "- Improvements and fixes.", 500)
+        notes.configure(state="disabled")
+        tk.Label(body, text="GOLD Express closes, updates itself and opens again (about a minute). "
+                            "Your settings and files are kept.", bg=CARD, fg=MUTED, font=(FONT, 8),
+                 anchor="w", justify="left", wraplength=520).pack(fill="x", pady=(10, 0))
+
+        foot = tk.Frame(body, background=CARD)
+        foot.pack(fill="x", pady=(14, 0))
+        status = tk.Label(foot, text="", bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w")
+        bar = gui.Progress(foot, height=10)
+        later = ttk.Button(foot, text="Later", style="TButton")
+        go_btn = ttk.Button(foot, text="↑  Update now", style="Accent.TButton")
+        go_btn.pack(side="right")
+        later.pack(side="right", padx=(0, 8))
+        state = {"downloading": False}
+
+        def close():
+            if state["downloading"]:
+                return  # the download finishes, then the app restarts
+            self._updating = False
+            win.destroy()
 
         def progress(done, total):
-            pct = f"{done * 100 // total}%" if total else f"{done // 1_000_000} MB"
-            self.ui(lambda: self._set_pill(f"Downloading update... {pct}", ORANGE, "#2A2A2A"))
+            frac = done / total if total else 0
+            text = f"Downloading...  {done * 100 // total}%" if total else f"Downloading...  {done // 1_000_000} MB"
+            self.ui(lambda: (bar.set(frac), status.configure(text=text)))
 
-        def work():
-            try:
-                setup = gu.download(rel, progress)
-            except Exception as e:
-                self.ui(lambda e=e: (setattr(self, "_updating", False), self.set_idle(), messagebox.showerror(
-                    APP_NAME, f"The update could not be downloaded:\n{e}\n\nTry again later or download it "
-                              f"from\n{rel['page']}")))
-                return
-            self.log(f"Installing {rel['name']}...")
-            self.ui(lambda: self._install_update(setup))
-        self.set_busy("Downloading update")
-        threading.Thread(target=work, daemon=True).start()
-        return True
+        def failed(err):
+            state["downloading"] = False
+            self.set_idle()
+            bar.pack_forget()
+            status.configure(text=f"The download failed: {str(err).splitlines()[0][:90]}", fg=RED)
+            go_btn.configure(text="Try again")
+            go_btn.state(["!disabled"])
+            later.configure(text="Close")
+            later.state(["!disabled"])
+
+        def start():
+            state["downloading"] = True
+            go_btn.state(["disabled"])
+            later.state(["disabled"])
+            status.configure(text="Downloading...", fg=MUTED)
+            status.pack(side="left")
+            bar.pack(side="left", fill="x", expand=True, padx=(12, 16))
+            self.set_busy("Downloading update")
+
+            def work():
+                try:
+                    setup = gu.download(rel, progress)
+                except Exception as e:
+                    self.ui(lambda e=e: failed(e))
+                    return
+                self.log(f"Installing {rel['name']}...")
+                self.ui(lambda: (bar.set(1), status.configure(text="Installing - GOLD Express will reopen..."),
+                                 self.after(600, lambda: self._install_update(setup))))
+            threading.Thread(target=work, daemon=True).start()
+
+        go_btn.configure(command=start)
+        later.configure(command=close)
+        win.protocol("WM_DELETE_WINDOW", close)
+        win.bind("<Escape>", lambda e: close())
+        self._place_dialog(win)
 
     def _install_update(self, setup):
         try:
@@ -473,7 +598,9 @@ class App(tk.Tk):
         except Exception as e:
             self._updating = False
             self.set_idle()
-            messagebox.showerror(APP_NAME, f"The update could not start:\n{e}")
+            if getattr(self, "_update_win", None) and self._update_win.winfo_exists():
+                self._update_win.destroy()
+            self._message("Update", "The update could not start", str(e), icon="")
             return
         self._on_close()  # the setup replaces the app's files and starts it again
 
@@ -528,6 +655,32 @@ class App(tk.Tk):
             pass
         self.log(f"ERROR: {err}")
         messagebox.showerror(APP_NAME, f"Something went wrong:\n\n{err}\n\nDetails: {HERE / 'gold_app_error.log'}")
+
+    # ----- Windows notifications
+    QUIET_TASKS = ("Connecting to GOLD", "Checking my orders", "Reading my orders")
+    TASK_NOTIFY_S = 20  # tell about tasks that took at least this long
+
+    def _notify(self, title, text, kind, force=False):
+        """Show a Windows notification if the user wants this kind (Settings > Notifications)."""
+        wanted = {"orders": self.notify_orders, "digest": self.notify_digest, "updates": self.notify_updates,
+                  "tasks": self.notify_tasks}.get(kind)
+        if not force and (not self.notify_on.get() or (wanted is not None and not wanted.get())):
+            return
+        gnotify.notify(title, text, tag=kind)
+        self.log(f"Notification: {title} - {text}")
+
+    def _app_in_front(self):
+        try:
+            return self.focus_displayof() is not None
+        except (KeyError, tk.TclError):
+            return False
+
+    def _task_done(self, label, seconds, ok):
+        """A worker task has finished: notify when it was long and the user is in another window."""
+        if seconds < self.TASK_NOTIFY_S or label.startswith(self.QUIET_TASKS) or self._app_in_front():
+            return
+        self._notify(f"{'Done' if ok else 'Failed'}: {label}",
+                     "GOLD Express has finished." if ok else "Open GOLD Express to see what went wrong.", "tasks")
 
     def job_failed(self, label, err, tb):
         self.set_idle()
@@ -863,6 +1016,27 @@ class App(tk.Tk):
         show_key_state()
         old_key = self.ai_key_file.get()
 
+        ttk.Label(body, text="Notifications", style="CardHead.TLabel").grid(
+            row=13, column=0, sticky="w", columnspan=4, pady=(16, 2))
+        ttk.Checkbutton(body, text="Show Windows notifications", variable=self.notify_on,
+                        style="Card.TCheckbutton").grid(row=14, column=0, columnspan=3, sticky="w", pady=2)
+        ttk.Button(body, text="Send a test", command=lambda: self._notify(
+            "GOLD Express notifications are on", "You will be told about your orders here.", "test",
+            force=True)).grid(row=14, column=3, sticky="e")
+        every = tk.Frame(body, background=CARD)
+        every.grid(row=15, column=0, columnspan=4, sticky="w", pady=2, padx=(24, 0))
+        ttk.Checkbutton(every, text="My orders: new orders and status changes - check every",
+                        variable=self.notify_orders, style="Card.TCheckbutton").pack(side="left")
+        ttk.Combobox(every, textvariable=self.notify_every, values=("15", "30", "60", "120"), width=4,
+                     state="readonly").pack(side="left", padx=6)
+        ttk.Label(every, text="minutes", style="Card.TLabel").pack(side="left")
+        for r, (text, var) in enumerate([
+                ("A daily reminder of late orders and orders due within 7 days", self.notify_digest),
+                ("When a new version of GOLD Express is available", self.notify_updates),
+                ("When a long task finishes while you are working in another window", self.notify_tasks)], 16):
+            ttk.Checkbutton(body, text=text, variable=var, style="Card.TCheckbutton").grid(
+                row=r, column=0, columnspan=4, sticky="w", pady=2, padx=(24, 0))
+
         def close():
             self.ai_key_file.trace_remove("write", key_trace)
             if self.ai_key_file.get() != old_key:
@@ -875,7 +1049,7 @@ class App(tk.Tk):
             win.destroy()
 
         btns = ttk.Frame(body, style="Card.TFrame")
-        btns.grid(row=13, column=0, columnspan=4, sticky="ew", pady=(18, 0))
+        btns.grid(row=20, column=0, columnspan=4, sticky="ew", pady=(18, 0))
         ttk.Label(btns, text=f"{APP_NAME} {__version__}  ·  \u00a9 2026 {AUTHOR}  ·  data folder: {HERE}",
                   style="CardMuted.TLabel", font=(FONT, 8)).pack(side="left")
         ttk.Button(btns, text="Done", style="Accent.TButton", command=close).pack(side="right")
@@ -1008,7 +1182,7 @@ class App(tk.Tk):
         if not self.my_time or time.time() - self.my_time > self.MY_CACHE_MIN * 60:
             self._my_load()
 
-    def _my_load(self, refresh=False):
+    def _my_load(self, refresh=False, background=False):
         if self.busy:
             return
         w = self.worker
@@ -1022,9 +1196,68 @@ class App(tk.Tk):
             self.my_orders, self.my_time = orders, time.time()
             self.log(f"My orders: {len(orders)} order(s) read from GOLD")
             self._my_render()
+            self._my_changes(orders)
 
         self.my_info.configure(text="Reading GOLD...")
-        w.submit("Reading my orders", job, done, retry=True)
+        w.submit("Checking my orders" if background else "Reading my orders", job, done, retry=True)
+
+    # --- watching My orders for changes (Windows notifications)
+    def _my_watch(self):
+        """Every minute: when it is time (Settings > Notifications), re-read My orders in the background -
+        only while GOLD Express is idle and the user is not typing / clicking in it."""
+        self.after(60_000, self._my_watch)
+        try:
+            every = int(self.notify_every.get()) * 60
+        except ValueError:
+            every = 1800
+        due = not self.my_time or time.time() - self.my_time >= every
+        idle = time.time() - getattr(self, "_last_input", 0) >= 60 or not self._app_in_front()
+        if (self.notify_on.get() and self.notify_orders.get() and due and idle and not self.busy
+                and self.worker.driver is not None):
+            self._my_load(background=True)
+
+    def _my_changes(self, orders):
+        """Compare with the last read (kept on disk, so changes while the app was closed count too) and
+        notify new orders, status changes and moved target dates; once a day, a reminder."""
+        try:
+            old = json.loads(MY_SNAPSHOT.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            old = None
+        now = {o["order"]: {"status": o.get("status", ""), "ittd": str(o.get("ittd_date") or ""),
+                            "customer": o.get("customer", ""), "site": o.get("cust_site_ref", "")}
+               for o in orders}
+        try:
+            MY_SNAPSHOT.write_text(json.dumps(now), encoding="utf-8")
+        except OSError:
+            pass
+        if old is not None:  # nothing to compare with the very first time
+            news = []
+            for order, o in now.items():
+                was = old.get(order)
+                if was is None:
+                    news.append((f"New order {order}", f"{o['customer']} · {o['site']} · {o['status']}"))
+                elif was["status"] != o["status"]:
+                    news.append((f"{order}: {was['status']} → {o['status']}", f"{o['customer']} · {o['site']}"))
+                elif was["ittd"] != o["ittd"] and o["ittd"]:
+                    d = datetime.fromisoformat(o["ittd"]).strftime("%d-%b-%Y")
+                    news.append((f"{order}: target date now {d}", f"{o['customer']} · {o['site']}"))
+            if len(news) > 3:
+                self._notify(f"{len(news)} changes in My orders",
+                             "; ".join(t for t, _ in news[:4]) + ("..." if len(news) > 4 else ""), "orders")
+            else:
+                for title, text in news:
+                    self._notify(title, text, "orders")
+        today = datetime.now().date()
+        if self.settings.get("digest_date") != str(today):
+            self.settings["digest_date"] = str(today)
+            save_settings(self.settings)
+            live = [o for o in orders if o.get("status") != "Closed" and o.get("ittd_date")]
+            late = sum(1 for o in live if o["ittd_date"] < today)
+            soon = sum(1 for o in live if 0 <= (o["ittd_date"] - today).days <= 7)
+            if late or soon:
+                self._notify("Your orders today",
+                             f"{late} past their target date, {soon} due within 7 days. Open My Orders for "
+                             "the list.", "digest")
 
     # --- drawing
     def _my_render(self):
@@ -1174,71 +1407,83 @@ class App(tk.Tk):
     RAG_UI = {"Red": ("#C62828", "#FDE7E7"), "Amber": ("#A15C00", "#FFF3D6"),
               "Green": ("#1E7B34", "#E4F4E8"), "No date": ("#595959", "#EFEFEF")}
 
-    def _build_overview_tab(self, f):
-        top = self._tile(f, pad=6, fill="x")
-        bar = tk.Frame(top.body, background=CARD)
-        bar.pack(fill="x")
-        self.ov_input = tk.StringVar()
-        ent = ttk.Entry(bar, textvariable=self.ov_input, width=20, font=(FONT, 10))
-        ent.pack(side="left", fill="x", expand=True)
-        ent.bind("<Return>", lambda e: self._ov_run())
-        self._btn(bar, "Show overview", self._ov_run, "Accent.TButton").pack(side="left", padx=(8, 0))
-        self._btn(bar, "↻  Refresh", lambda: self._ov_run(refresh=True)).pack(side="left", padx=(6, 0))
-        self.ov_export_btn = self._btn(bar, "⤓  Export to Excel", self._ov_export)
-        self.ov_export_btn.pack(side="left", padx=(6, 0))
-        tk.Label(top.body, text="One or more GOLD orders, separated by spaces or commas.  Status against the "
-                                f"revised (or initial) target date: Red = passed, Amber = {go.AMBER_DAYS} days "
-                                "or less, Green = more.", bg=CARD, fg=FAINT, font=(FONT, 8), anchor="w",
-                 justify="left", wraplength=900).pack(fill="x", pady=(6, 0))
+    def _tile_head(self, parent, title, icon):
+        """A tile's title row (icon + bold title); returns the row so buttons can go on its right."""
+        h = tk.Frame(parent, background=CARD)
+        h.pack(fill="x", pady=(0, 6))
+        tk.Label(h, text=icon, bg=CARD, fg=ORANGE, font=(gui.ICONS, 11)).pack(side="left", padx=(0, 8))
+        tk.Label(h, text=title, bg=CARD, fg=INK, font=(FONT, 11, "bold")).pack(side="left")
+        return h
 
-        # Summary of all orders shown: colourful counters
+    def _build_overview_tab(self, f):
+        # Colourful counters for all the orders read (same look as My Orders)
         strip = tk.Frame(f, background=BG)
-        strip.pack(fill="x", padx=6, pady=(4, 6))
+        strip.pack(fill="x", padx=6, pady=(2, 8))
         self.ov_summary = {}
         for col, (key, caption, icon, palette) in enumerate((
-                ("all", "Orders", "", "lavender"), ("Green", "On track", "", "mint"),
-                ("Amber", "Due soon", "", "amber"), ("Red", "Late", "", "rose"))):
-            card = gui.StatCard(strip, caption, icon, palette, sub_lines=1, big_size=15)
+                ("all", "Orders", "", "v_blue"), ("Green", "On track", "", "v_green"),
+                ("Amber", "Due soon", "", "v_orange"), ("Red", "Late", "", "v_rose"),
+                ("lead", "Lead time at risk", "", "v_purple"))):
+            card = gui.StatCard(strip, caption, icon, palette, sub_lines=1, big_size=15,
+                                command=lambda k=key: self._ov_pick(k))
             card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
             strip.columnconfigure(col, weight=1, uniform="ovsum")
             self.ov_summary[key] = card
         self._ov_summary_set({})
 
-        body = ttk.Panedwindow(f, orient="horizontal")
-        body.pack(fill="both", expand=True)
-        lt = self._tile(body)
+        lower = tk.Frame(f, background=BG)
+        lower.pack(fill="both", expand=True)
+        lower.rowconfigure(0, weight=1)
+        lower.columnconfigure(0, weight=2, uniform="ovlower")   # orders
+        lower.columnconfigure(1, weight=3, uniform="ovlower")   # the selected order's details
+
+        # Orders: type them, read them, pick one
+        lt = self._tile(lower)
+        lt.grid(row=0, column=0, sticky="nsew")
         left = lt.body
-        tk.Label(left, text="ORDERS", bg=CARD, fg=FAINT, font=(FONT, 8, "bold")).pack(anchor="w", pady=(0, 6))
+        head = self._tile_head(left, "Orders", "")
+        self.ov_export_btn = self._btn(head, "⤓  Excel", self._ov_export, "Small.TButton")
+        self.ov_export_btn.pack(side="right")
+        self._btn(head, "↻  Refresh", lambda: self._ov_run(refresh=True), "Small.TButton").pack(side="right",
+                                                                                              padx=6)
+        bar = tk.Frame(left, background=CARD)
+        bar.pack(fill="x", pady=(0, 4))
+        self.ov_input = tk.StringVar()
+        ent = ttk.Entry(bar, textvariable=self.ov_input, width=16, font=(FONT, 10))
+        ent.pack(side="left", fill="x", expand=True)
+        ent.bind("<Return>", lambda e: self._ov_run())
+        self._btn(bar, "Show", self._ov_run, "Accent.TButton").pack(side="left", padx=(6, 0))
+        hint = tk.Label(left, text="One or more orders, separated by spaces or commas.  Red = target date "
+                                   f"passed, Amber = {go.AMBER_DAYS} days or less, Green = more.", bg=CARD,
+                        fg=FAINT, font=(FONT, 8), anchor="w", justify="left")
+        hint.pack(fill="x", pady=(0, 8))
+        hint.bind("<Configure>", lambda e: hint.configure(wraplength=max(e.width - 4, 100)))
         lf = tk.Frame(left, background=CARD)
         lf.pack(fill="both", expand=True)
         self.ov_list = ttk.Treeview(lf, columns=("order", "status", "days", "lead"), show="headings",
                                     selectmode="browse")
-        for c, w, t in [("order", 110, "Order"), ("status", 80, "Status"), ("days", 130, "Days left"),
-                        ("lead", 90, "Lead time")]:
+        scale = self.winfo_fpixels("1i") / 96
+        for c, w, t in [("order", 95, "Order"), ("status", 70, "Status"), ("days", 110, "Days left"),
+                        ("lead", 80, "Lead time")]:
             self.ov_list.heading(c, text=t, anchor="w")
-            self.ov_list.column(c, width=w, minwidth=w, anchor="w", stretch=c == "days")
+            self.ov_list.column(c, width=int(w * scale), minwidth=int(50 * scale), anchor="w", stretch=True)
         for k, (fg, bg) in self.RAG_UI.items():
             self.ov_list.tag_configure(k, foreground=fg, background=bg)
         self.ov_list.tag_configure("err", foreground=RED)
         self.ov_list.pack(fill="both", expand=True)
         self.ov_list.bind("<<TreeviewSelect>>", lambda e: self._ov_show_selected())
-        body.add(lt, weight=2)
 
-        rt = self._tile(body)
+        # The selected order
+        rt = self._tile(lower)
+        rt.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
         right = rt.body
-        body.add(rt, weight=5)
-
-        def place_sash(e=None):  # room for the order list (~ a third), once the page has its size
-            if body.winfo_width() > 600:
-                body.sashpos(0, max(int(body.winfo_width() * 0.34), 380))
-                body.unbind("<Configure>")
-        body.bind("<Configure>", place_sash)
-        self.ov_title = tk.Label(right, text="Enter an order to see its overview", bg=CARD, fg=INK,
-                                 font=(FONT, 14, "bold"), anchor="w")
+        self._tile_head(right, "Order details", "")
+        self.ov_title = tk.Label(right, text="Type orders on the left and press Show", bg=CARD, fg=INK,
+                                 font=(FONT, 13, "bold"), anchor="w")
         self.ov_title.pack(fill="x")
         # Cards: order value, delivery status, 120-day lead time
         cards = tk.Frame(right, background=CARD)
-        cards.pack(fill="x", pady=(10, 12))
+        cards.pack(fill="x", pady=(8, 10))
         self.ov_cards = {}
         for col, (key, caption, icon) in enumerate((("value", "Order total value", ""),
                                                     ("delivery", "Delivery status", ""),
@@ -1442,10 +1687,20 @@ class App(tk.Tk):
         n = len(rags)
         counts = {k: sum(1 for r in rags.values() if r == k) for k in ("Green", "Amber", "Red")}
         self.ov_summary["all"].set(str(n), "orders read" if n != 1 else "order read")
-        for key, text in (("Green", "more than {d} days left"), ("Amber", "{d} days or less left"),
-                          ("Red", "target date passed")):
+        for key, text in (("Green", "> {d} days left"), ("Amber", "{d} days or less"), ("Red", "date passed")):
             pct = f"{counts[key] * 100 // n}% · " if n else ""
             self.ov_summary[key].set(str(counts[key]), pct + text.format(d=go.AMBER_DAYS))
+        leads = sum(1 for o in rags if (self.ov_results.get(o) or {}).get("lt_rag") == "Red")
+        self.ov_summary["lead"].set(str(leads), "past the 120-day deadline")
+
+    def _ov_pick(self, key):
+        """A counter was clicked: select the first order it counts."""
+        for o in self.ov_list.get_children():
+            ov = self.ov_results.get(o) or {}
+            if key == "all" or ov.get("rag") == key or (key == "lead" and ov.get("lt_rag") == "Red"):
+                self.ov_list.selection_set(o)
+                self.ov_list.see(o)
+                return
 
     def _ov_export(self):
         order_list = [o for o in self.ov_list.get_children() if o in self.ov_results]
@@ -2651,7 +2906,10 @@ class App(tk.Tk):
         self.settings.update(screenshots=self.shot_dir.get(), exports=self.export_dir.get(),
                              full_page=self.full_page.get(), auto_shot=self.auto_shot.get(),
                              per_order_folder=self.per_order.get(), parallel_sessions=self.parallel.get(),
-                             ai_key_file=self.ai_key_file.get())
+                             ai_key_file=self.ai_key_file.get(), notify_on=self.notify_on.get(),
+                             notify_orders=self.notify_orders.get(), notify_every=self.notify_every.get(),
+                             notify_digest=self.notify_digest.get(), notify_updates=self.notify_updates.get(),
+                             notify_tasks=self.notify_tasks.get())
         save_settings(self.settings)
 
     def _browse(self, var):

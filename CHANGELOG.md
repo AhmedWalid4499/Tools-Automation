@@ -1,5 +1,17 @@
 # GOLD Express - what's new
 
+## 2.3.0
+- **Overview** now looks like My Orders: colourful counters (Orders, On track, Due soon, Late,
+  Lead time at risk - click one to jump to that order), an Orders tile and an Order details tile.
+- **New update window** in the app's style: what's new, Later / Update now, and a progress bar.
+  The "up to date" and error messages match the app too.
+- **Windows notifications** (Settings > Notifications, all on by default):
+  - My orders: new orders, status changes and moved target dates (checked every 30 minutes while
+    you are not using GOLD Express; 15 / 60 / 120 possible).
+  - A daily reminder of late orders and orders due within 7 days.
+  - A new version of GOLD Express is available.
+  - A long task has finished while you were working in another window.
+
 ## 2.2.1
 - **Smaller, lighter buttons**, fields and selectors everywhere.
 - **Compact cards** on the Overview and My Orders: about half the height, so the tables and details

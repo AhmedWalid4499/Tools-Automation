@@ -343,6 +343,31 @@ class Bars(tk.Canvas, _Redraw):
             self.configure(cursor="hand2")
 
 
+class Progress(tk.Canvas, _Redraw):
+    """A rounded progress bar: set(fraction 0..1)."""
+
+    def __init__(self, parent, height=10, bg=CARD, colour=ORANGE):
+        super().__init__(parent, height=height, background=bg, highlightthickness=0, borderwidth=0)
+        self.fraction, self.colour, self._imgs = 0.0, colour, []
+        self._watch()
+
+    def set(self, fraction):
+        self.fraction = max(0.0, min(1.0, fraction))
+        if self._size:
+            self.redraw(*self._size)
+
+    def redraw(self, w, h):
+        self.delete("all")
+        track = ImageTk.PhotoImage(rounded_image(w, h, h // 2, "#EFEBE5"))
+        self._imgs = [track]
+        self.create_image(0, 0, image=track, anchor="nw")
+        fw = int(w * self.fraction)
+        if fw >= h:
+            bar = ImageTk.PhotoImage(rounded_image(fw, h, h // 2, self.colour))
+            self._imgs.append(bar)
+            self.create_image(0, 0, image=bar, anchor="nw")
+
+
 class Pill(tk.Canvas):
     """A small rounded label (status, tags). set(text, fg, bg)."""
 

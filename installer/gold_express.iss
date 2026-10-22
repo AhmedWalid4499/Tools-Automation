@@ -75,7 +75,8 @@ Source: "{#AppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "GOLD order assistant"
+; AppUserModelID: lets GOLD Express show Windows notifications under its own name (gold_notify.py)
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "GOLD order assistant"; AppUserModelID: "AhmedElBourgy.GOLDExpress"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon; Comment: "GOLD order assistant"
 
 [Run]
