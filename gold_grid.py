@@ -300,8 +300,9 @@ class EditGrid(tk.Frame):
 
     def _focus_out(self, ed):
         if self._editor and self._editor[0] is ed:
-            focus = self.focus_get()
-            if focus is ed or (focus is not None and str(focus).startswith(str(ed))):
+            # The path, not focus_get(): that raises KeyError while a drop-down list has focus
+            focus = str(self.tk.call("focus"))
+            if focus.startswith(str(ed)):
                 return
             self.close_editor(True)
 

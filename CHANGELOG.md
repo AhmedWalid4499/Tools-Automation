@@ -1,5 +1,9 @@
 # GOLD Express - what's new
 
+## 2.6.1
+- Fixed: picking a name from the drop-down list in Order assignment (and other lists in the bulk
+  tables) showed an error.
+
 ## 2.6.0
 - **A much quicker GOLD bot**: questions about your orders ("which are late?") are answered
   in seconds from My Orders, and order questions read only the tab they need (Teams for the STM,
