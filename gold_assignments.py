@@ -15,8 +15,21 @@ from urllib.parse import urlparse
 
 import gold_names as gn
 
-SOURCE_URL = ("https://kmlibraries-shp.itn.intraorange/GDO-OTB/GDO%20OTB%20Analytics/"
-              "Power%20BI%20-%20APM%20Open%20Orders/Power%20BI%20-%20APM%20Open%20Orders.xlsx")
+# The sheet's SharePoint link, as shared (Settings > Order Assignment can change it). The data is never kept
+# in the app: it is read from this link, and read again whenever SharePoint has a newer version.
+SOURCE_LINK = ("https://kmlibraries-shp.itn.intraorange/GDO-OTB/GDO%20OTB%20Analytics/"
+               "Power%20BI%20-%20APM%20Open%20Orders/Power%20BI%20-%20APM%20Open%20Orders.xlsx"
+               "?d=w39fe582af0264b7fa3ba641248168f24")
+
+
+def file_url(link):
+    """The file itself: a shared link's '?d=...' / '?web=1' opens the Excel Online viewer instead."""
+    return link.strip().split("#")[0].split("?")[0]
+
+
+def file_name(link):
+    from urllib.parse import unquote
+    return unquote(file_url(link).rsplit("/", 1)[-1])
 
 # The workbook's columns we use (by header text, so a moved column still works)
 COLUMNS = {"order": "Order Number", "status": "Order Status", "type": "Order Type", "service": "Product/Service To",
@@ -31,19 +44,33 @@ ASSIGNED, UNASSIGNED, NOT_IN_LIST = "Assigned", "Unassigned", "Not in DPM list"
 NO_TEAM = "No team"  # a DPM-list name without a team (add it in DPM names > Edit, or import the teams)
 REGIONS = {team: dept for dept, team in gn.TEAMS.items()}  # "DPM Egypt" -> "APM Europe"
 
+# Ask SharePoint for the file's version (ETag) and time; read it only when it is a version we don't have
 _FETCH_JS = r"""
 const cb = arguments[arguments.length - 1];
-fetch(arguments[0], {credentials: 'include'}).then(async r => {
+const [url, known] = arguments;
+(async () => {
+  const h = await fetch(url, {method: 'HEAD', credentials: 'include'});
+  const info = {status: h.status, etag: h.headers.get('etag'), modified: h.headers.get('last-modified'),
+                type: h.headers.get('content-type') || ''};
+  if (h.status !== 200 || (known && info.etag === known)) return cb(info);
+  const r = await fetch(url, {credentials: 'include'});
   const b = new Uint8Array(await r.arrayBuffer());
   let s = ''; for (let i = 0; i < b.length; i += 32768) s += String.fromCharCode.apply(null, b.subarray(i, i + 32768));
-  cb({status: r.status, data: btoa(s)});
-}).catch(e => cb({err: String(e)}));
+  info.status = r.status; info.etag = r.headers.get('etag') || info.etag;
+  info.modified = r.headers.get('last-modified') || info.modified; info.data = btoa(s);
+  cb(info);
+})().catch(e => cb({err: String(e)}));
 """
 
 
-def fetch(driver, dest, url=SOURCE_URL, sign_in_wait=90):
-    """Download the workbook with the user's Orange sign-in: open its SharePoint library in a new tab of the
-    app's Firefox (it signs in like GOLD does), fetch the file from there, close the tab. Writes dest."""
+def fetch(driver, dest, link=SOURCE_LINK, known_version=None, sign_in_wait=90):
+    """Read the sheet from its SharePoint link with the user's Orange sign-in: open its library in a new tab of
+    the app's Firefox (it signs in like GOLD does), ask SharePoint for the file's current version and, when
+    it is not known_version (or dest is missing), download it to dest (replacing the old copy). Closes the tab.
+    Returns {"changed": bool, "version": etag, "modified": datetime (UTC) or None}."""
+    url = file_url(link)
+    if Path(dest).exists() is False:
+        known_version = None
     folder = url.rsplit("/", 2)[0] + "/"  # the library the file sits in
     host = urlparse(url).hostname
     home = driver.current_window_handle
@@ -62,19 +89,27 @@ def fetch(driver, dest, url=SOURCE_URL, sign_in_wait=90):
         else:
             raise RuntimeError("the SharePoint site did not open - are you on the Orange network?")
         driver.set_script_timeout(240)
-        r = driver.execute_async_script(_FETCH_JS, url) or {}
+        r = driver.execute_async_script(_FETCH_JS, url, known_version or "") or {}
         if "err" in r:
-            raise RuntimeError(f"the file could not be downloaded ({r['err']})")
-        data = base64.b64decode(r.get("data", ""))
-        if r.get("status") != 200 or data[:2] != b"PK":
-            raise RuntimeError(f"the file could not be downloaded (HTTP {r.get('status')}) - "
-                               "do you have access to the GDO OTB Analytics site?")
-        dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_name(dest.name + ".part")
-        tmp.write_bytes(data)
-        tmp.replace(dest)
-        return dest
+            raise RuntimeError(f"the sheet could not be read ({r['err']})")
+        if r.get("status") != 200:
+            raise RuntimeError(f"the sheet could not be read (HTTP {r.get('status')}) - is the link right, and do "
+                               "you have access to that SharePoint site?")
+        modified = None
+        with suppress(Exception):
+            from email.utils import parsedate_to_datetime
+            modified = parsedate_to_datetime(r["modified"])
+        info = {"changed": "data" in r, "version": r.get("etag"), "modified": modified}
+        if "data" in r:
+            data = base64.b64decode(r["data"])
+            if data[:2] != b"PK":
+                raise RuntimeError("the link does not give an Excel file - use the sheet's own link")
+            dest = Path(dest)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(dest.name + ".part")
+            tmp.write_bytes(data)
+            tmp.replace(dest)  # the previous copy is replaced
+        return info
     finally:
         with suppress(Exception):
             driver.close()

@@ -1,5 +1,13 @@
 # GOLD Express - what's new
 
+## 2.10.1
+- **Order Assignment is live on the sheet's link**: every time you open the tab (at most every
+  30 minutes) GOLD Express asks SharePoint whether the APM Open Orders sheet has a newer version and
+  reads it when it does - nothing is kept from an old copy. Refresh reads it straight away.
+- The link is in Settings > Order Assignment (paste a new link there if the sheet moves); the tab
+  shows which sheet it reads and when SharePoint last refreshed it - click that line to open the
+  sheet in your browser.
+
 ## 2.10.0
 - **New: Order Assignment** - which DPM has which open APM order. It reads the "Power BI - APM
   Open Orders" sheet straight from its SharePoint link (with your Orange sign-in), once a day when

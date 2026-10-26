@@ -1166,6 +1166,7 @@ class App(tk.Tk):
             self.ai_key_file.trace_remove("write", key_trace)
             if self.ai_key_file.get() != old_key:
                 self.chat = None  # the next question uses the new key file
+            save_oa_link()
             self._store_settings()
             if self.show_browser.get() != was_shown and self.worker.driver is not None:
                 self.worker.restart = True
@@ -1173,8 +1174,27 @@ class App(tk.Tk):
                          " from the next action.")
             win.destroy()
 
+        ttk.Label(body, text="Order Assignment", style="CardHead.TLabel").grid(
+            row=22, column=0, sticky="w", columnspan=4, pady=(16, 2))
+        ttk.Label(body, text="Sheet link", style="Card.TLabel").grid(row=23, column=0, sticky="w", pady=4)
+        oa_link = tk.StringVar(value=self._oa_link())
+        ttk.Entry(body, textvariable=oa_link, width=62).grid(row=23, column=1, columnspan=2, sticky="ew", padx=8)
+        ttk.Button(body, text="Default", command=lambda: oa_link.set(gas.SOURCE_LINK)).grid(row=23, column=3)
+        ttk.Label(body, text="The APM Open Orders sheet on SharePoint (refreshed there every day). The orders are "
+                             "always read from this link.", style="CardMuted.TLabel", font=(FONT, 8)).grid(
+            row=24, column=1, columnspan=3, sticky="w", padx=8)
+
+        def save_oa_link():
+            link = " ".join(oa_link.get().split())
+            if link and link != self._oa_link():
+                self.settings["oa_url"] = link
+                self.settings["oa_checked"] = 0  # read from the new link when the tab is opened
+                self.log("Order Assignment will read the sheet from the new link.")
+                if self.notebook.current() is self.oa_frame:
+                    self.after(200, lambda: self._oa_load(force=True))
+
         btns = ttk.Frame(body, style="Card.TFrame")
-        btns.grid(row=22, column=0, columnspan=4, sticky="ew", pady=(18, 0))
+        btns.grid(row=25, column=0, columnspan=4, sticky="ew", pady=(18, 0))
         ttk.Label(btns, text=f"{APP_NAME} {__version__}  ·  \u00a9 2026 {AUTHOR}  ·  data folder: {HERE}",
                   style="CardMuted.TLabel", font=(FONT, 8)).pack(side="left")
         ttk.Button(btns, text="Done", style="Accent.TButton", command=close).pack(side="right")
@@ -1629,6 +1649,11 @@ class App(tk.Tk):
         self.oa_chip = gui.Pill(filt, "", ORANGE_DARK, ORANGE_SOFT, bg=CARD,
                                 command=lambda: self._oa_filter(show="all", region="All regions", dpm=""))
 
+        # Where the data comes from (click: open the sheet in the browser)
+        self.oa_source = tk.Label(tt.body, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w", cursor="hand2")
+        self.oa_source.pack(fill="x", pady=(0, 6))
+        self.oa_source.bind("<Button-1>", lambda e: os.startfile(self._oa_link()))
+
         tf = tk.Frame(tt.body, background=CARD)
         tf.pack(fill="both", expand=True)
         self.oa_tree = ttk.Treeview(tf, columns=[c for c, _, _ in self.OA_COLUMNS], show="headings",
@@ -1678,47 +1703,71 @@ class App(tk.Tk):
         self.oa_people_note.pack(fill="x", pady=(6, 0))
         self._oa_render()
 
-    # --- loading: from the SharePoint link, at most once a day (or on Refresh); one copy is kept, overwritten
+    # --- loading: live from the sheet's SharePoint link. Each time the tab is opened (checked at most every
+    # OA_CHECK_MIN minutes) SharePoint is asked for the sheet's version; a new version replaces the old data.
+    OA_CHECK_MIN = 30
+
+    def _oa_link(self):
+        return (self.settings.get("oa_url") or gas.SOURCE_LINK).strip()
+
     def _oa_shown(self):
         if self.oa_loading:
             return
-        fetched = self.settings.get("oa_fetched", 0)
-        fresh = OA_FILE.exists() and datetime.fromtimestamp(fetched).date() == datetime.now().date()
-        if fresh and not self.oa_time:
-            self._oa_read_file()  # today's sheet is already here: just read it
-        elif not fresh:
+        checked = self.settings.get("oa_checked", 0)
+        recent = OA_FILE.exists() and time.time() - checked < self.OA_CHECK_MIN * 60 \
+            and self.settings.get("oa_source") == self._oa_link()
+        if recent:
+            if not self.oa_time:
+                self._oa_read_file()  # just checked: the sheet we have is the latest
+        elif self.busy:
+            if not self.oa_time and OA_FILE.exists():
+                self._oa_read_file()  # show the last sheet now; it is checked next time
+        else:
             self._oa_load()
 
     def _oa_load(self, force=False):
-        """Get the latest sheet from the SharePoint link (it replaces yesterday's), then read it."""
+        """Ask SharePoint for the sheet's current version and read it when it changed (Refresh: always)."""
         if self.busy or self.oa_loading:
             return
-        url = self.settings.get("oa_url") or gas.SOURCE_URL
+        link = self._oa_link()
+        same_source = self.settings.get("oa_source") == link
+        known = None if force or not same_source else self.settings.get("oa_version")
         self.oa_loading = True
-        self.oa_info.configure(text="Getting the latest sheet...")
-        self.oa_empty_hint.configure(text="Getting the latest APM Open Orders sheet from SharePoint...")
+        self.oa_info.configure(text="Checking SharePoint...")
+        self.oa_empty_hint.configure(text="Reading the APM Open Orders sheet from SharePoint...")
         w = self.worker
 
         def job():
             w.ensure_browser()
-            self.log("Order Assignment: getting the APM Open Orders sheet from SharePoint...")
-            gas.fetch(w.driver, OA_FILE, url)
-            return gas.read(OA_FILE)
+            self.log("Order Assignment: checking the APM Open Orders sheet on SharePoint...")
+            info = gas.fetch(w.driver, OA_FILE, link, known)
+            orders = gas.read(OA_FILE) if info["changed"] or not self.oa_time else None
+            return info, orders
 
-        def done(orders):
+        def done(res):
+            info, orders = res
             self.oa_loading = False
-            self.settings["oa_fetched"] = time.time()
+            self.settings.update(oa_checked=time.time(), oa_version=info["version"], oa_source=link,
+                                 oa_modified=info["modified"].timestamp() if info["modified"] else None)
             save_settings(self.settings)
-            self._oa_loaded(orders)
+            if orders is not None:
+                self.log("Order Assignment: " + ("a new version of the sheet was read" if info["changed"]
+                                                 else "the sheet is up to date"))
+                self._oa_loaded(orders)
+            else:
+                self.log("Order Assignment: the sheet has not changed since it was read")
+                self._oa_render()
 
-        w.submit("Getting the APM Open Orders sheet", job, done, retry=True)
+        w.submit("Reading the APM Open Orders sheet", job, done, retry=True)
         self.after(1000, self._oa_watch_failure)
 
     def _oa_watch_failure(self):
         if self.oa_loading and not self.busy:  # the job ended with an error (already shown)
             self.oa_loading = False
-            self.oa_empty_hint.configure(text="The sheet could not be read - check the Orange network, then "
-                                              "click below.")
+            self.oa_empty_hint.configure(text="The sheet could not be read - check the Orange network and the "
+                                              "link (Settings > Order Assignment), then click below.")
+            if OA_FILE.exists() and not self.oa_time:
+                self._oa_read_file()  # meanwhile show the last version read
             self._oa_render()
         elif self.oa_loading:
             self.after(1000, self._oa_watch_failure)
@@ -1740,7 +1789,7 @@ class App(tk.Tk):
 
     def _oa_loaded(self, orders):
         self.oa_orders = gas.classify(orders, self.dpm_names)
-        self.oa_time = self.settings.get("oa_fetched") or OA_FILE.stat().st_mtime
+        self.oa_time = self.settings.get("oa_modified") or OA_FILE.stat().st_mtime  # when SharePoint refreshed it
         s = gas.summary(self.oa_orders)
         self.log(f"Order Assignment: {s['total']} open orders - {s['assigned']} with DPMs, "
                  f"{s['unassigned']} unassigned, {s['not_in_list']} with people not in the DPM list")
@@ -1817,7 +1866,12 @@ class App(tk.Tk):
         n = lambda v: str(v) if loaded else "-"
         pct = lambda v: f"{v * 100 // max(s['total'], 1)}% of the orders" if loaded else ""
         when = datetime.fromtimestamp(self.oa_time).strftime("%d-%b %H:%M") if loaded else ""
-        self.oa_cards["total"].set(n(s["total"]), f"sheet from {when}" if loaded else "not loaded yet")
+        self.oa_cards["total"].set(n(s["total"]), f"sheet refreshed {when}" if loaded else "not loaded yet")
+        checked = self.settings.get("oa_checked")
+        self.oa_source.configure(
+            text=f"Live from SharePoint: {gas.file_name(self._oa_link())}" +
+                 (f"  ·  refreshed there {when}" if loaded else "") +
+                 (f"  ·  checked {datetime.fromtimestamp(checked):%H:%M}" if loaded and checked else ""))
         self.oa_cards["assigned"].set(n(s["assigned"]), pct(s["assigned"]))
         self.oa_cards["unassigned"].set(n(s["unassigned"]), pct(s["unassigned"]))
         self.oa_cards["not_in_list"].set(n(s["not_in_list"]), f"{s['outsiders']} people" if loaded else "")
