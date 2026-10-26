@@ -131,20 +131,25 @@ def download(release, progress=None):
     """Download the setup to a temp folder. progress(done_bytes, total_bytes)."""
     dest = Path(tempfile.gettempdir()) / "GOLD Express update" / release["name"]
     dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")  # becomes the setup only once it is complete
     req = urllib.request.Request(release["url"], headers={"User-Agent": HEADERS["User-Agent"]})
-    with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+    with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
         total = int(r.headers.get("Content-Length") or release.get("size") or 0)
         done = 0
         while True:
-            chunk = r.read(256 * 1024)
+            chunk = r.read(256 * 1024)  # a dropped connection ends early here without an error
             if not chunk:
                 break
             f.write(chunk)
             done += len(chunk)
             if progress:
                 progress(done, total)
-    if release.get("size") and dest.stat().st_size != release["size"]:
-        raise RuntimeError("the download is incomplete - please try again")
+    with open(part, "rb") as f:
+        is_exe = f.read(2) == b"MZ"
+    if (total and done != total) or done < 1_000_000 or not is_exe:  # never run a broken setup
+        part.unlink(missing_ok=True)
+        raise RuntimeError("the download is incomplete (the connection dropped) - please try again")
+    part.replace(dest)
     return dest
 
 

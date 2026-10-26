@@ -24,7 +24,8 @@ APP_DIR = BUILD / "dist" / "GOLD Express"
 INSTALLER_DIR = HERE / "installer"
 RELEASE = HERE / "release"
 ISCC = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Inno Setup 6" / "ISCC.exe"
-NAMES_DEFAULT = HERE / "data" / "dpm_names_default.json"   # private: not in git, packed into the app
+# The DPM list (names + GOLD user IDs) is NOT packed into the app: the installer is downloadable from the public
+# Releases page. Users fill their list with DPM names > "Import DPM teams from Org Chart" (Orange sign-in).
 REPO = "AhmedWalid4499/Tools-Automation"
 
 
@@ -125,7 +126,6 @@ def build_app():
         "--add-binary", f"{geckodriver()};.",
         "--add-data", f"{HERE / 'gold_express.ico'};.",
         "--add-data", f"{HERE / 'assets'};assets",  # logo images for the side menu and Ask GOLD
-        *(["--add-data", f"{NAMES_DEFAULT};."] if NAMES_DEFAULT.exists() else []),
         "--collect-submodules", "selenium",
         "--collect-submodules", "anthropic",  # Ask GOLD (imported when the first question is sent)
         "--workpath", str(BUILD / "work"), "--specpath", str(BUILD), "--distpath", str(BUILD / "dist"),
@@ -171,8 +171,6 @@ def publish(setup):
 
 if __name__ == "__main__":
     BUILD.mkdir(parents=True, exist_ok=True)
-    if not NAMES_DEFAULT.exists():
-        print("NOTE: data/dpm_names_default.json not found - the app will start with an empty DPM list.")
     wizard_art()
     print("App built:", build_app())
     setup = build_installer()

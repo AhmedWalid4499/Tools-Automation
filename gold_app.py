@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import re
+import sys
 import threading
 import time
 import traceback
@@ -337,7 +338,7 @@ class App(tk.Tk):
         self._style()
         self._build()
         self.report_callback_exception = self._callback_error
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.protocol("WM_DELETE_WINDOW", self._request_close)
         gui.smooth_window_changes(self)  # no half-drawn frames when maximizing / restoring
         self.after(100, self._pump)
         self.online = True
@@ -371,12 +372,19 @@ class App(tk.Tk):
         self.ui_queue.put(fn)
 
     def _pump(self):
+        """Run what the worker asked the UI to do. One failing step must not stop the others (or the
+        app would stay 'busy' for good), so each runs on its own."""
         try:
             while True:
-                self.ui_queue.get_nowait()()
+                fn = self.ui_queue.get_nowait()
+                try:
+                    fn()
+                except Exception:
+                    self._callback_error(*sys.exc_info())
         except queue.Empty:
             pass
-        self.after(100, self._pump)
+        finally:
+            self.after(100, self._pump)
 
     def log(self, msg):
         def add():
@@ -397,6 +405,7 @@ class App(tk.Tk):
 
     def set_busy(self, label):
         self.busy = True
+        self.busy_label = label
         self._set_pill(f"{label}...", ORANGE, "#2A2A2A")
         for b in self.buttons:
             b.state(["disabled"])
@@ -535,8 +544,38 @@ class App(tk.Tk):
         ttk.Button(row, text="Later", command=win.destroy).pack(side="right", padx=(0, 8))
         self._place_dialog(win)
 
+    def _when_idle(self, what, then):
+        """Run then() now, or - while a task is running (a bulk update may be saving in GOLD) - once it has
+        finished, so an order is never left half saved."""
+        if not self.busy:
+            then()
+            return
+        self.log(f"{what} when the current task has finished...")
+        self._set_pill(f"{what} after this task...", ORANGE, "#2A2A2A")
+
+        def wait():
+            if self.busy:
+                self.after(500, wait)
+            else:
+                then()
+        self.after(500, wait)
+
+    def _request_close(self):
+        """The window's X: while a task runs, ask first, then stop a bulk run after its current order."""
+        if self.busy:
+            if not messagebox.askyesno(
+                    APP_NAME, f"GOLD Express is still working:\n{getattr(self, 'busy_label', 'a task')}.\n\n"
+                              "Close anyway? A bulk update stops after the order it is saving now, then "
+                              "GOLD Express closes.", icon="warning"):
+                return
+            self.bulk_stop_flag.set()
+        self._when_idle("Closing", self._on_close)
+
     def _restart(self):
-        """Start a new GOLD Express that waits for this one to close, then close."""
+        """Start a new GOLD Express that waits for this one to close, then close (after any running task)."""
+        if self.busy:
+            self._when_idle("Restarting", self._restart)
+            return
         import subprocess
         import sys as _sys
         args = [_sys.executable] + ([] if getattr(_sys, "frozen", False) else [str(Path(__file__).resolve())])
@@ -596,6 +635,12 @@ class App(tk.Tk):
             later.state(["!disabled"])
 
         def start():
+            if self.busy:  # the installer closes the app: never in the middle of a task
+                status.configure(text="Waiting for the current task to finish...", fg=MUTED)
+                status.pack(side="left")
+                go_btn.state(["disabled"])
+                self._when_idle("Updating", start)
+                return
             state["downloading"] = True
             go_btn.state(["disabled"])
             later.state(["disabled"])
@@ -716,7 +761,10 @@ class App(tk.Tk):
     def job_failed(self, label, err, tb):
         self.set_idle()
         self.log(f"ERROR while {label.lower()}: {err}")
-        (HERE / "gold_app_error.log").write_text(tb, encoding="utf-8")
+        try:
+            (HERE / "gold_app_error.log").write_text(tb, encoding="utf-8")
+        except OSError:
+            pass  # the log is locked (open, OneDrive...): still tell the user
         messagebox.showerror(APP_NAME, f"{label} failed:\n\n{err}")
 
     # ----- look
@@ -1812,11 +1860,11 @@ class App(tk.Tk):
         ttk.Label(words, text=title, style="Head.TLabel").pack(anchor="w")
         ttk.Label(words, text=hint, style="Muted.TLabel", font=(FONT, 8)).pack(anchor="w")
         grid = lambda: getattr(self, grid_attr)
-        ttk.Button(tb, text="Clear all", command=lambda: grid().clear()).pack(side="right")
-        ttk.Button(tb, text="+ 10 rows", command=lambda: grid().add_rows(10)).pack(side="right", padx=4)
-        ttk.Button(tb, text="Paste from Excel", command=lambda: self._grid_paste(grid())).pack(side="right")
-        ttk.Button(tb, text="Load Excel/CSV...", command=lambda: self._grid_load(grid())).pack(
-            side="right", padx=4)
+        # self._btn: disabled while GOLD Express is busy (changing the rows mid-run would mix up the results)
+        self._btn(tb, "Clear all", lambda: grid().clear()).pack(side="right")
+        self._btn(tb, "+ 10 rows", lambda: grid().add_rows(10)).pack(side="right", padx=4)
+        self._btn(tb, "Paste from Excel", lambda: self._grid_paste(grid())).pack(side="right")
+        self._btn(tb, "Load Excel/CSV...", lambda: self._grid_load(grid())).pack(side="right", padx=4)
         words.pack_forget()  # packed again after the buttons: they keep their size, the hint gets the rest
         words.pack(side="left", fill="x", expand=True)
 
@@ -1847,7 +1895,7 @@ class App(tk.Tk):
         stop.pack(side="right")
         stop.state(["disabled"])
         self._btn(rb, "Run update", run_cmd, "Accent.TButton").pack(side="right", padx=6)
-        ttk.Button(rb, text="Check", command=check_cmd).pack(side="right")
+        self._btn(rb, "Check", check_cmd).pack(side="right")
         # Run status (shown while a run is going, in the same row): clock, which order, progress
         info = tk.Frame(rb, background=CARD)
         clock = tk.Label(info, text="", bg=ORANGE_SOFT, fg=ORANGE_DARK, font=("Consolas", 11, "bold"), padx=10,
@@ -1915,6 +1963,8 @@ class App(tk.Tk):
                     msg = f"{msg}  ({int(time.time() - t0)} s)"
                     self.ui(lambda: run.update(iid=None))  # stop the row's own clock before its result shows
                     set_status(iid, f"✓ {msg}", "ok")
+                    if not dry:  # saved in GOLD: a re-run skips this row (no duplicate milestone / save)
+                        self.ui(lambda iid=iid: grid.mark_done(iid))
                     results.append(row + ["OK", msg])
                     self.log(f"{row[0]}: {msg}")
                 except Exception as e:
@@ -1927,11 +1977,15 @@ class App(tk.Tk):
                         oo.open_orders_tab(w.driver, w.wait, discard_changes=True)
                     except Exception:
                         pass
-            stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+            stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             path = Path(ctx["workbook"]).parent / f"{sheet.replace(' ', '_')}_{stamp}.xlsx"
-            gx.write_sheet(path, sheet, [header_line + ("  |  TEST ONLY - nothing saved" if dry else ""),
-                                         f"Run {datetime.now():%d-%b-%Y %H:%M}"],
-                           [("Results", columns + ["Result", "Details"], results)])
+            try:  # the GOLD work is done: a file problem (open in Excel, OneDrive) must not hide the results
+                gx.write_sheet(path, sheet, [header_line + ("  |  TEST ONLY - nothing saved" if dry else ""),
+                                             f"Run {datetime.now():%d-%b-%Y %H:%M}"],
+                               [("Results", columns + ["Result", "Details"], results)])
+            except Exception as e:
+                self.log(f"Could not save the results file: {e}")
+                path = None
             return path, results
 
         def finish(summary):
@@ -1951,10 +2005,14 @@ class App(tk.Tk):
             path, results = res
             ok = sum(1 for r in results if r[len(columns)] == "OK")
             finish(f"{ok} of {len(results)} {'tested' if dry else 'done'}")
-            self.log(f"{label}: {ok} of {len(results)} OK. Results: {path}")
-            if messagebox.askyesno(APP_NAME, f"{ok} of {len(results)} order(s) "
-                                             f"{'tested' if dry else 'done'}.\n\nResults saved to\n{path}"
-                                             "\n\nOpen it now?"):
+            self.log(f"{label}: {ok} of {len(results)} OK. Results: {path or 'not saved'}")
+            if not path:
+                messagebox.showinfo(APP_NAME, f"{ok} of {len(results)} order(s) {'tested' if dry else 'done'}."
+                                              "\n\nThe results file could not be saved - the Status column "
+                                              "shows each order's result.")
+            elif messagebox.askyesno(APP_NAME, f"{ok} of {len(results)} order(s) "
+                                               f"{'tested' if dry else 'done'}.\n\nResults saved to\n{path}"
+                                               "\n\nOpen it now?"):
                 os.startfile(path)
 
         w.submit(f"{label}: {len(items)} order(s)", job, done)
@@ -2025,7 +2083,13 @@ class App(tk.Tk):
                 messagebox.showwarning(APP_NAME, f"Default date: {e}")
                 return None
         items, seen, bad = [], set(), 0
+        g.skipped = 0
         for iid, r in g.filled():
+            if g.is_done(iid, r):  # already saved in GOLD in this session: never add it twice
+                g.skipped += 1
+                g.set_status(iid, "✓ Already done - skipped (change the row to run it again)", "ok")
+                seen.add(r["order"])
+                continue
             try:
                 order = r["order"]
                 if not re.fullmatch(r"\d{2}-\d{5,8}", order):
@@ -2055,7 +2119,9 @@ class App(tk.Tk):
             return
         items, bad = checked
         if not items:
-            messagebox.showinfo(APP_NAME, "Fill in at least one Gold order and Date, then try again.")
+            messagebox.showinfo(APP_NAME, "Every row was already done in GOLD (✓) - nothing to run again."
+                                if self.rtdd_grid.skipped else
+                                "Fill in at least one Gold order and Date, then try again.")
             return
         if bad and not messagebox.askyesno(APP_NAME, "Some rows have problems (shown in red) and will be "
                                                      "skipped.\nContinue with the others?"):
@@ -2083,14 +2149,15 @@ class App(tk.Tk):
                 if not hasattr(self, "assign_team_vars") or gn.team_of(e) in ticked]
 
     def _dpm_normalize(self, value):
-        """Snap what was typed to a list name: exact, else the only name that fits ('elbourgy')."""
+        """Snap a typed / pasted name to the list's spelling - only when it IS that name, ignoring spaces,
+        hyphens, capitals and order ('Ahmed El-Bourgy', 'ELBOURGY Ahmed'). A partial name is never snapped
+        to someone else (pick it from the suggestions instead)."""
         e = gn.lookup(self.dpm_names, value)
         if e:
             return gn.full_name(e)
-        for names in (self._dpm_choices(), [gn.full_name(x) for x in self.dpm_names]):
-            fits = [n for n in names if gn.matches(n, value)]
-            if len(fits) == 1:
-                return fits[0]
+        same = [x for x in self.dpm_names if gn.same_person_name(gn.full_name(x), value)]
+        if len(same) == 1:
+            return gn.full_name(same[0])
         return " ".join(str(value).split())
 
     def _build_assign_tab(self, f):
@@ -2166,7 +2233,13 @@ class App(tk.Tk):
         g.close_editor(True)
         default = self.assign_default.get().strip()
         items, seen, bad = [], set(), 0
+        g.skipped = 0
         for iid, r in g.filled():
+            if g.is_done(iid, r):  # already saved in GOLD in this session
+                g.skipped += 1
+                g.set_status(iid, "✓ Already done - skipped (change the row to run it again)", "ok")
+                seen.add(r["order"])
+                continue
             try:
                 order = r["order"]
                 if not re.fullmatch(r"\d{2}-\d{5,8}", order):
@@ -2195,7 +2268,9 @@ class App(tk.Tk):
             return
         items, bad = self._assign_check()
         if not items:
-            messagebox.showinfo(APP_NAME, "Fill in at least one Gold order with its STM (DPM), then try again.")
+            messagebox.showinfo(APP_NAME, "Every row was already done in GOLD (✓) - nothing to run again."
+                                if self.assign_grid.skipped else
+                                "Fill in at least one Gold order with its STM (DPM), then try again.")
             return
         if bad and not messagebox.askyesno(APP_NAME, "Some rows have problems (shown in red) and will be "
                                                      "skipped.\nContinue with the others?"):
@@ -2304,8 +2379,10 @@ class App(tk.Tk):
             t.insert("", "end", iid=str(i), values=(name, e.get("team", ""), e["first"], e["last"],
                                                     e.get("user", ""), status), tags=[x for x in tags if x])
             shown += 1
-        self.names_count.configure(text=f"{len(self.dpm_names)} names" +
-                                   (f"  ·  {shown} shown" if q or team != "All" else ""))
+        self.names_count.configure(
+            text=f"{len(self.dpm_names)} names" + (f"  ·  {shown} shown" if q or team != "All" else "")
+            if self.dpm_names else "No names yet - click “Import DPM teams from Org Chart” to add the DPM teams "
+                                   "(Egypt, India, Brazil), or add names one by one.")
 
     def _names_import_oc(self):
         """Org Chart > Search by Organization > Department 'APM': APM Europe -> DPM Egypt, APM APAC -> DPM India,

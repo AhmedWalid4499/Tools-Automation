@@ -25,6 +25,7 @@ class EditGrid(tk.Frame):
         self.on_change = on_change
         self._editor = None
         self._suggest = None  # the name suggestions under a typeahead cell
+        self.done = {}  # iid -> the row's values when it was saved in GOLD (see mark_done)
         ttk.Style(self).configure("Grid.Treeview", rowheight=28)
         self.tree = ttk.Treeview(self, columns=self.all_keys, show="headings",
                                  selectmode="extended", style="Grid.Treeview")
@@ -150,6 +151,7 @@ class EditGrid(tk.Frame):
     def clear(self, start_rows=15):
         self.close_editor(False)
         self.tree.delete(*self.rows())
+        self.done.clear()
         self.add_rows(start_rows)
 
     def delete_selected(self):
@@ -164,7 +166,17 @@ class EditGrid(tk.Frame):
         tags = [t for t in self.tree.item(iid, "tags") if t == "odd"]
         self.tree.item(iid, values=vals, tags=tags)
 
+    def mark_done(self, iid):
+        """This row was saved in GOLD: a later run skips it while the row is unchanged."""
+        if self.tree.exists(iid):
+            self.done[iid] = tuple(self.record(iid).values())
+
+    def is_done(self, iid, record):
+        return self.done.get(iid) == tuple(record.values())
+
     def set_status(self, iid, text, tag=None):
+        if not self.tree.exists(iid):  # the row was cleared meanwhile
+            return
         vals = list(self.tree.item(iid, "values"))
         vals[-1] = text
         tags = [t for t in self.tree.item(iid, "tags") if t == "odd"] + ([tag] if tag else [])

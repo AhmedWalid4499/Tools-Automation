@@ -1,5 +1,21 @@
 # GOLD Express - what's new
 
+## 2.9.0
+Safety fixes from a full check of the app:
+- **No duplicate updates**: running Revised Target Date or Order assignment again (e.g. after Stop)
+  skips the rows already saved in GOLD (✓). Change a row to run it again.
+- **The right DPM**: a pasted or typed name is only matched to a list name when it is the same
+  name (spaces, hyphens, capitals or order aside) - "Sara Ali" is no longer turned into
+  "Sara Alington". Pick partial names from the suggestions. The Org Chart import keeps two people
+  with the same names but different emails apart.
+- **Safe updates**: an update that did not download completely is never installed.
+- **No more stuck "busy"**: one error no longer freezes the app; the table buttons are disabled
+  while a run is going; the results file failing to save no longer hides the results.
+- **Closing during a run**: GOLD Express asks first, stops after the current order and then
+  closes. Updating or restarting (dark mode) waits until the task is finished.
+- **The DPM list is no longer part of the installer.** New users fill it with DPM names >
+  "Import DPM teams from Org Chart". Existing lists are kept.
+
 ## 2.8.1
 - Org Chart: the person card with the "Reports to" tree now scrolls (scrollbar and mouse wheel)
   when the manager chain is long; the results table scrolls sideways to show every column.

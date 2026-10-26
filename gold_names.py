@@ -83,6 +83,15 @@ def matches(name, typed):
     return not words or letters(typed) in n or all(w in n for w in words)
 
 
+def same_person_name(a, b):
+    """The same name, written differently: spaces, hyphens, capitals or first/last order."""
+    wa, wb = str(a).split(), str(b).split()
+    if not wa or not wb:
+        return False
+    return letters(a) == letters(b) or (len(wb) > 1 and letters(a) == letters(" ".join(wb[1:] + wb[:1]))) \
+        or (len(wb) > 1 and letters(a) == letters(" ".join(wb[-1:] + wb[:-1])))
+
+
 def from_org_chart(rec, team):
     """An Org Chart record -> a list entry. Display names are 'Maria Julia BENVENUTI' (last name in capitals)."""
     words = str(rec.get("display_name") or "").split()
@@ -101,8 +110,10 @@ def merge_team(names, people):
     added = updated = 0
     for p in people:
         keys = {letters(p["first"] + p["last"]), letters(p["last"] + p["first"])}
-        hit = next((e for e in names if (p["email"] and e.get("email") == p["email"])
-                    or letters(e["first"] + e["last"]) in keys), None)
+        # same email, else the same name - but never two different emails (different people)
+        hit = next((e for e in names if p["email"] and e.get("email") == p["email"]), None) or \
+            next((e for e in names if letters(e["first"] + e["last"]) in keys
+                  and not (p["email"] and e.get("email") and e["email"] != p["email"])), None)
         if hit:
             if hit.get("team") != p["team"] or (p["email"] and not hit.get("email")):
                 hit["team"] = p["team"]
