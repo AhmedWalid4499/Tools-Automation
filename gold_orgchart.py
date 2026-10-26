@@ -43,6 +43,21 @@ $.ajax({url: '/ooc_staff/search/', type: 'POST', timeout: 30000,
   data: {csrfmiddlewaretoken: getCSRFToken(), firstName: first, lastName: last, email: email, cuid: cuid},
   success: j => cb({ok: j.empl || []}), error: x => cb({err: x.status})});
 """
+# "Search by: Organization": the department list, then everyone in the chosen departments (the page's own requests)
+_DEPTS_JS = r"""
+const cb = arguments[arguments.length - 1];
+$.ajax({url: '/ooc_staff/ajax/deptdesc/', type: 'POST', timeout: 60000,
+  data: {csrfmiddlewaretoken: getCSRFToken(), mgtcode: '', dept_id: ''},
+  success: j => cb({ok: j.deptdesc || []}), error: x => cb({err: x.status})});
+"""
+_DEPT_PEOPLE_JS = r"""
+const cb = arguments[arguments.length - 1];
+$.ajax({url: '/ooc_staff/search/', type: 'POST', timeout: 60000,
+  data: {csrfmiddlewaretoken: getCSRFToken(), firstName: '', lastName: '', email: '', cuid: '', 'generic-company': '',
+         'headcount-keys': '', p1: '', p2: '', m3: '', 'mgt-code': '', 'department-id': '', department: arguments[0],
+         region: '', country: '', location: ''},
+  success: j => cb({ok: j.empl || []}), error: x => cb({err: x.status})});
+"""
 
 
 def firefox(profile_dir=None, headless=False):
@@ -124,6 +139,25 @@ class OrgChart:
         if "err" in r:
             raise RuntimeError(f"The Org Chart search failed (HTTP {r['err']}).")
         return r.get("ok", [])
+
+    def _run(self, js, *args):
+        d = self.d
+        d.switch_to.window(self.handle)
+        d.set_script_timeout(90)
+        r = d.execute_async_script(js, *args) or {}
+        if "err" in r:
+            raise RuntimeError(f"The Org Chart search failed (HTTP {r['err']}).")
+        return r.get("ok", [])
+
+    def departments(self, text=""):
+        """Departments whose description contains text (Search by: Organization > Department), as
+        [{"id", "name"}], e.g. {"id": "11783", "name": "APM Europe"}."""
+        return [{"id": x.get("OOC_DEPT_ID", ""), "name": (x.get("OOC_DEPT_DESCR") or "").strip()}
+                for x in self._run(_DEPTS_JS) if text.lower() in (x.get("OOC_DEPT_DESCR") or "").lower()]
+
+    def department_people(self, dept_ids):
+        """Raw records of everyone in these departments (by id)."""
+        return self._run(_DEPT_PEOPLE_JS, list(dept_ids))
 
     def by_cuid(self, cuid):
         got = self.search(cuid=cuid)

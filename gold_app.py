@@ -2071,18 +2071,43 @@ class App(tk.Tk):
                        ["Gold order", "Date", "Reason"], "RTDD update", title, dry)
 
     # ----- Bulk Order Assignment tab
+    def _dpm_teams(self):
+        """The DPM teams in the list (DPM Egypt, DPM India, DPM Brazil...), then Other (names without a team)."""
+        teams = sorted({gn.team_of(e) for e in self.dpm_names} - {gn.NO_TEAM} | set(gn.TEAMS.values()))
+        return teams + [gn.NO_TEAM]
+
     def _dpm_choices(self):
-        return [gn.full_name(e) for e in self.dpm_names]
+        """The names offered in Order assignment: those of the teams ticked there."""
+        ticked = {t for t, v in getattr(self, "assign_team_vars", {}).items() if v.get()}
+        return [gn.full_name(e) for e in self.dpm_names
+                if not hasattr(self, "assign_team_vars") or gn.team_of(e) in ticked]
 
     def _dpm_normalize(self, value):
+        """Snap what was typed to a list name: exact, else the only name that fits ('elbourgy')."""
         e = gn.lookup(self.dpm_names, value)
-        return gn.full_name(e) if e else " ".join(str(value).split())
+        if e:
+            return gn.full_name(e)
+        for names in (self._dpm_choices(), [gn.full_name(x) for x in self.dpm_names]):
+            fits = [n for n in names if gn.matches(n, value)]
+            if len(fits) == 1:
+                return fits[0]
+        return " ".join(str(value).split())
 
     def _build_assign_tab(self, f):
         top = self._tile(f, fill="x").body
         ttk.Label(top, text="Makes the chosen DPM the primary STM of each order (Teams > Manage Teams > STM), "
                             "then saves the teams. Pick names from the list - manage it in the DPM Names tab.",
                   style="Muted.TLabel", wraplength=900, justify="left").pack(anchor="w")
+        teams_row = tk.Frame(top, background=CARD, pady=(8))
+        teams_row.pack(fill="x")
+        ttk.Label(teams_row, text="DPM teams", style="Muted.TLabel").pack(side="left", padx=(0, 8))
+        saved = self.settings.get("assign_teams")
+        self.assign_team_vars = {}
+        self.assign_teams_row = teams_row
+        for team in self._dpm_teams():
+            self._assign_team_box(team, saved is None or team in saved)
+        self.assign_team_info = ttk.Label(teams_row, text="", style="Muted.TLabel")
+        self.assign_team_info.pack(side="right")
         opts = tk.Frame(top, background=CARD, pady=10)
         opts.pack(fill="x")
         ttk.Label(opts, text="For empty cells use", style="Muted.TLabel").pack(side="left")
@@ -2092,23 +2117,49 @@ class App(tk.Tk):
         self.assign_default_cb.pack(side="left", padx=8)
 
         def filter_default(event):
-            typed = self.assign_default.get().strip().lower()
-            self.assign_default_cb.configure(values=[c for c in self._dpm_choices() if typed in c.lower()]
+            if event.keysym in ("Return", "Tab", "Escape", "Up", "Down"):
+                return
+            typed = self.assign_default.get().strip()
+            self.assign_default_cb.configure(values=[c for c in self._dpm_choices() if gn.matches(c, typed)]
                                              if typed else [""] + self._dpm_choices())
         self.assign_default_cb.bind("<KeyRelease>", filter_default)
+        self.assign_default_cb.bind("<FocusOut>", lambda e: self.assign_default.get().strip() and
+                                    self.assign_default.set(self._dpm_normalize(self.assign_default.get())))
 
         f = self._tile(f, fill="both", expand=True).body  # the table and its buttons in their own tile
         self._grid_toolbar(f, "Orders to assign",
-                           "click a cell to type  ·  type in the DPM cell to filter names  ·  Ctrl+V pastes from Excel",
-                           "assign_grid")
+                           "click a cell to type  ·  in the DPM cell type any part of a name (e.g. elbourgy)  ·  "
+                           "Ctrl+V pastes from Excel", "assign_grid")
         self.assign_grid = EditGrid(f, [
             {"key": "order", "title": "Gold order", "width": 140},
             {"key": "dpm", "title": "STM (DPM)", "width": 300, "choices": self._dpm_choices,
-             "typeahead": True, "normalize": self._dpm_normalize},
+             "typeahead": True, "match": gn.matches, "normalize": self._dpm_normalize},
         ])
+        self._assign_teams_changed(save=False)
         self.assign_grid.pack(fill="both", expand=True)
         self.assign_dry = tk.BooleanVar(value=False)
         self.assign_stop_btn = self._bulk_bar(f, self.assign_dry, self._assign_run, self._assign_check)
+
+    def _assign_team_box(self, team, on=True):
+        var = tk.BooleanVar(value=on)
+        self.assign_team_vars[team] = var
+        ttk.Checkbutton(self.assign_teams_row, text=team, variable=var, style="Card.TCheckbutton",
+                        command=self._assign_teams_changed).pack(side="left", padx=(0, 10))
+
+    def _assign_teams_changed(self, save=True):
+        """The DPM team tick-boxes changed: offer only those names (and remember the choice)."""
+        for team in self._dpm_teams():  # a team that appeared since (e.g. after an Org Chart import)
+            if team not in self.assign_team_vars:
+                self._assign_team_box(team)
+        names = self._dpm_choices()
+        self.assign_default_cb.configure(values=[""] + names)
+        ticked = [t for t, v in self.assign_team_vars.items() if v.get()]
+        counts = {t: sum(gn.team_of(e) == t for e in self.dpm_names) for t in self.assign_team_vars}
+        self.assign_team_info.configure(
+            text=f"{len(names)} names offered  ·  " + ", ".join(f"{t} {counts[t]}" for t in ticked if counts[t]))
+        if save:
+            self.settings["assign_teams"] = ticked
+            save_settings(self.settings)
 
     def _assign_check(self):
         g = self.assign_grid
@@ -2174,22 +2225,29 @@ class App(tk.Tk):
         self._btn(tb, "Edit", self._names_edit).pack(side="left", padx=6)
         self._btn(tb, "Delete", self._names_delete).pack(side="left")
         self._btn(tb, "Check names in GOLD", self._names_check).pack(side="left", padx=(18, 0))
-        ttk.Label(tb, text="Find").pack(side="left", padx=(18, 4))
-        self.names_filter = tk.StringVar()
-        fe = ttk.Entry(tb, textvariable=self.names_filter, width=22)
-        fe.pack(side="left")
-        fe.bind("<KeyRelease>", lambda e: self._names_fill())
         self._btn(tb, "Export to Excel", self._names_export).pack(side="right")
         self._btn(tb, "Import Excel/CSV...", self._names_import).pack(side="right", padx=6)
+        self._btn(tb, "👥  Import DPM teams from Org Chart", self._names_import_oc).pack(side="right")
+        fb = tk.Frame(top, background=CARD)
+        fb.pack(fill="x", pady=(10, 0))
+        ttk.Label(fb, text="Find").pack(side="left", padx=(0, 4))
+        self.names_filter = tk.StringVar()
+        fe = ttk.Entry(fb, textvariable=self.names_filter, width=22)
+        fe.pack(side="left")
+        fe.bind("<KeyRelease>", lambda e: self._names_fill())
+        ttk.Label(fb, text="Team").pack(side="left", padx=(18, 6))
+        self.names_team = tk.StringVar(value="All")
+        self.names_team_row = tk.Frame(fb, background=CARD)
+        self.names_team_row.pack(side="left")
 
         f = self._tile(f, fill="both", expand=True).body
         lf = tk.Frame(f, background=CARD)
         lf.pack(fill="both", expand=True)
-        cols = ("name", "first", "last", "user", "check")
+        cols = ("name", "team", "first", "last", "user", "check")
         self.names_tree = ttk.Treeview(lf, columns=cols, show="headings", selectmode="extended")
         self.names_tree_copy = gui.TableCopy(self.names_tree, self.log, menu=True)  # Excel-like copying
-        for c, w, t in [("name", 220, "Name"), ("first", 160, "GOLD first name"), ("last", 160, "GOLD last name"),
-                        ("user", 120, "GOLD user"), ("check", 300, "Checked in GOLD")]:
+        for c, w, t in [("name", 220, "Name"), ("team", 110, "Team"), ("first", 150, "GOLD first name"),
+                        ("last", 150, "GOLD last name"), ("user", 110, "GOLD user"), ("check", 280, "Checked in GOLD")]:
             self.names_tree.heading(c, text=t, anchor="w")
             self.names_tree.column(c, width=w, anchor="w", stretch=c == "check")
         self.names_tree.tag_configure("ok", foreground=GREEN)
@@ -2208,26 +2266,78 @@ class App(tk.Tk):
     def _names_saved(self):
         self.dpm_names = gn.save(self.dpm_names)
         self._names_fill()
-        if hasattr(self, "assign_default_cb"):
-            self.assign_default_cb.configure(values=[""] + self._dpm_choices())
+        if hasattr(self, "assign_team_vars"):
+            self._assign_teams_changed(save=False)
+
+    def _names_team_buttons(self):
+        """The Team filter: All, then each team in the list (DPM Egypt, DPM India, DPM Brazil, Other)."""
+        row = self.names_team_row
+        teams = ["All"] + [t for t in self._dpm_teams() if any(gn.team_of(e) == t for e in self.dpm_names)]
+        if getattr(self, "_names_teams_shown", None) == teams:
+            return
+        self._names_teams_shown = teams
+        for w in row.winfo_children():
+            w.destroy()
+        if self.names_team.get() not in teams:
+            self.names_team.set("All")
+        for t in teams:
+            ttk.Radiobutton(row, text=t, value=t, variable=self.names_team, style="SegSm.TRadiobutton",
+                            command=self._names_fill).pack(side="left", padx=(0, 4))
 
     def _names_fill(self):
         t = self.names_tree
         t.delete(*t.get_children())
-        q = self.names_filter.get().strip().lower() if hasattr(self, "names_filter") else ""
+        self._names_team_buttons()
+        q = self.names_filter.get().strip() if hasattr(self, "names_filter") else ""
+        team = self.names_team.get()
         shown = 0
         for i, e in enumerate(self.dpm_names):
             name = gn.full_name(e)
-            if q and q not in name.lower() and q not in e.get("user", "").lower():
+            if q and not gn.matches(name, q) and q.lower() not in e.get("user", "").lower():
+                continue
+            if team != "All" and gn.team_of(e) != team:
                 continue
             status = e.get("check", "")
             tags = ["ok" if status.startswith("✓") else "bad" if status.startswith("✗") else ""]
             if shown % 2:
                 tags.append("odd")
-            t.insert("", "end", iid=str(i), values=(name, e["first"], e["last"], e.get("user", ""), status),
-                     tags=[x for x in tags if x])
+            t.insert("", "end", iid=str(i), values=(name, e.get("team", ""), e["first"], e["last"],
+                                                    e.get("user", ""), status), tags=[x for x in tags if x])
             shown += 1
-        self.names_count.configure(text=f"{len(self.dpm_names)} names" + (f"  ·  {shown} shown" if q else ""))
+        self.names_count.configure(text=f"{len(self.dpm_names)} names" +
+                                   (f"  ·  {shown} shown" if q or team != "All" else ""))
+
+    def _names_import_oc(self):
+        """Org Chart > Search by Organization > Department 'APM': APM Europe -> DPM Egypt, APM APAC -> DPM India,
+        APM AME -> DPM Brazil. Adds the people (or sets the team of names already in the list). Read-only."""
+        if self.busy:
+            return
+
+        def job():
+            def read(oc):
+                depts = [x for x in oc.departments("APM") if x["name"] in gn.TEAMS]
+                if not depts:
+                    raise RuntimeError("No APM departments found in the Org Chart.")
+                out = []
+                for x in depts:
+                    self.log(f"Org Chart: reading {x['name']}...")
+                    out += [gn.from_org_chart(r, gn.TEAMS[x["name"]]) for r in oc.department_people([x["id"]])]
+                return out
+            return self._org(read)
+
+        def done(people):
+            before = len(self.dpm_names)
+            added, updated = gn.merge_team(self.dpm_names, people)
+            self._names_saved()
+            counts = ", ".join(f"{t}: {sum(p['team'] == t for p in people)}" for t in gn.TEAMS.values())
+            self.log(f"DPM teams from the Org Chart ({counts}): {added} added, {updated} updated")
+            self._message(APP_NAME, "DPM teams imported",
+                          f"{len(people)} people in the Org Chart ({counts}).\n\n{added} added to the list, "
+                          f"{updated} names already there now have their team ({before} names before, "
+                          f"{len(self.dpm_names)} now).\n\nTip: 'Check names in GOLD' makes sure the new "
+                          "names are spelled as in GOLD.")
+
+        self.worker.submit("Reading DPM teams from the Org Chart", job, done, retry=True)
 
     def _names_dialog(self, title, entry=None):
         """Small form for one name. Returns {'first','last'} or None."""
@@ -2242,10 +2352,15 @@ class App(tk.Tk):
         first = tk.StringVar(value=(entry or {}).get("first", ""))
         last = tk.StringVar(value=(entry or {}).get("last", ""))
         user = tk.StringVar(value=(entry or {}).get("user", ""))
+        team = tk.StringVar(value=(entry or {}).get("team", ""))
         for r, (label, var) in enumerate((("First name", first), ("Last name", last),
-                                          ("GOLD user ID", user)), 1):
+                                          ("GOLD user ID", user), ("Team", team)), 1):
             ttk.Label(body, text=label, style="Card.TLabel").grid(row=r, column=0, sticky="w", pady=4)
-            e = ttk.Entry(body, textvariable=var, width=34)
+            if var is team:
+                e = ttk.Combobox(body, textvariable=var, width=32,
+                                 values=[""] + [t for t in self._dpm_teams() if t != gn.NO_TEAM])
+            else:
+                e = ttk.Entry(body, textvariable=var, width=34)
             e.grid(row=r, column=1, padx=(10, 0), pady=4)
             if r == 1:
                 e.focus_set()
@@ -2260,14 +2375,15 @@ class App(tk.Tk):
             if dup is not None and dup is not entry:
                 messagebox.showwarning(APP_NAME, f"{f} {l} is already in the list.", parent=win)
                 return
-            result.update(first=f, last=l, user=user.get().strip())
+            result.update(first=f, last=l, user=user.get().strip(), team=" ".join(team.get().split()))
             win.destroy()
 
         ttk.Label(body, text="GOLD user ID is optional - only needed when two GOLD users share the name "
-                             "(e.g. asmith2).", style="CardMuted.TLabel", wraplength=360).grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+                             "(e.g. asmith2). Team: e.g. DPM Egypt (used to filter names in Order assignment).",
+                  style="CardMuted.TLabel", wraplength=360).grid(row=5, column=0, columnspan=2, sticky="w",
+                                                                 pady=(4, 0))
         btns = ttk.Frame(body, style="Card.TFrame")
-        btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        btns.grid(row=6, column=0, columnspan=2, sticky="e", pady=(14, 0))
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right")
         ttk.Button(btns, text="Save", style="Accent.TButton", command=ok).pack(side="right", padx=6)
         win.bind("<Return>", ok)
@@ -2280,8 +2396,9 @@ class App(tk.Tk):
 
     def _names_add(self):
         new = self._names_dialog("Add DPM name")
-        if new and not new.get("user"):
-            new.pop("user", None)
+        for k in ("user", "team"):
+            if new and not new.get(k):
+                new.pop(k, None)
         if new:
             self.dpm_names.append(new)
             self._names_saved()
@@ -2297,8 +2414,9 @@ class App(tk.Tk):
         if new:
             old = gn.full_name(entry)
             entry.update(new)
-            if not entry.get("user"):
-                entry.pop("user", None)
+            for k in ("user", "team"):
+                if not entry.get(k):
+                    entry.pop(k, None)
             entry.pop("check", None)
             self._names_saved()
             self.log(f"DPM edited: {old} -> {gn.full_name(entry)}")
@@ -2352,8 +2470,10 @@ class App(tk.Tk):
         path = Path(ctx["workbook"]).parent / "DPM_names.xlsx"
         try:
             gx.write_sheet(path, "DPM names", [f"{len(self.dpm_names)} names", f"Exported {datetime.now():%d-%b-%Y %H:%M}"],
-                           [("DPM names", ["Name", "GOLD first name", "GOLD last name", "GOLD user", "Checked"],
-                             [[gn.full_name(e), e["first"], e["last"], e.get("user", ""), e.get("check", "")]
+                           [("DPM names", ["Name", "Team", "GOLD first name", "GOLD last name", "GOLD user", "Email",
+                                           "Checked"],
+                             [[gn.full_name(e), e.get("team", ""), e["first"], e["last"], e.get("user", ""),
+                               e.get("email", ""), e.get("check", "")]
                               for e in self.dpm_names])])
         except PermissionError:
             messagebox.showerror(APP_NAME, f"{path.name} is open in Excel. Close it and try again.")

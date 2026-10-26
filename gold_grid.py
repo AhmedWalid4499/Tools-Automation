@@ -2,6 +2,7 @@
 rows copied from Excel, Delete clears rows, load .xlsx/.csv, and a Status column the app fills.
 
 columns: [{"key", "title", "width", "stretch"?, "choices"?: callable -> [str],
+           "typeahead"?: bool, "match"?: callable(choice, typed) -> bool,
            "normalize"?: callable(str) -> str}]   (a Status column is added automatically)
 """
 import csv
@@ -23,6 +24,7 @@ class EditGrid(tk.Frame):
         self.all_keys = ["n"] + self.keys + ["status"]
         self.on_change = on_change
         self._editor = None
+        self._suggest = None  # the name suggestions under a typeahead cell
         ttk.Style(self).configure("Grid.Treeview", rowheight=28)
         self.tree = ttk.Treeview(self, columns=self.all_keys, show="headings",
                                  selectmode="extended", style="Grid.Treeview")
@@ -264,16 +266,60 @@ class EditGrid(tk.Frame):
         col = next(c for c in self.cols if c["key"] == key)
         var = tk.StringVar(value=self.get(iid, key))
         if col.get("choices") and col.get("typeahead"):
-            # Type to filter a long list (e.g. names); the value snaps to the list's spelling.
+            # Type to search a long list (e.g. names): matches show in a list under the cell (arrows + Enter or
+            # a click picks one); the arrow button shows the whole (filtered) list. The value snaps to the list.
             choices = col["choices"]()
+            fits = col.get("match") or (lambda c, typed: typed.lower() in c.lower())
             ed = ttk.Combobox(self.tree, textvariable=var, state="normal", values=choices)
+            self._suggest = sug = tk.Listbox(self.tree, height=1, activestyle="none", exportselection=False,
+                                             takefocus=0, background=gui.CARD, foreground=gui.INK,
+                                             selectbackground=gui.ORANGE, selectforeground="white",
+                                             highlightthickness=1, highlightbackground=gui.LINE, borderwidth=0,
+                                             font=("Segoe UI", 10))
+
+            def show(items):
+                sug.delete(0, "end")
+                for c in items[:200]:
+                    sug.insert("end", c)
+                if not items:
+                    sug.place_forget()
+                    return
+                sug.selection_set(0)
+                rows = min(len(items), 8)
+                sug.configure(height=rows)
+                below = y + h + rows * 22 + 6 <= self.tree.winfo_height()
+                sug.place(x=x, y=y + h if below else max(y - rows * 22 - 6, 0), width=max(w, 260))
+                sug.lift()
 
             def filter_list(event):
                 if event.keysym in ("Return", "Tab", "Escape", "Up", "Down"):
                     return
-                typed = var.get().strip().lower()
-                ed.configure(values=[c for c in choices if typed in c.lower()] if typed else choices)
+                typed = var.get().strip()
+                found = [c for c in choices if fits(c, typed)] if typed else choices
+                ed.configure(values=found)
+                show(found if typed else [])
+
+            def step(d):
+                if not sug.winfo_ismapped() or not sug.size():
+                    return None  # the combobox's own arrow keys
+                i = (sug.curselection() or (0,))[0]
+                i = max(0, min(sug.size() - 1, i + d))
+                sug.selection_clear(0, "end")
+                sug.selection_set(i)
+                sug.see(i)
+                return "break"
+
+            def pick(event=None):
+                sel = sug.curselection()
+                if sel:
+                    var.set(sug.get(sel[0]))
+                self.close_editor(True)
+                return "break"
+
             ed.bind("<KeyRelease>", filter_list)
+            ed.bind("<Down>", lambda e: step(1))
+            ed.bind("<Up>", lambda e: step(-1))
+            sug.bind("<ButtonRelease-1>", pick)
             ed.bind("<<ComboboxSelected>>", lambda e: self.close_editor(True))
             col.setdefault("normalize", lambda v, cs=choices: next(
                 (c for c in col["choices"]() if c.lower() == " ".join(v.split()).lower()), v))
@@ -302,7 +348,7 @@ class EditGrid(tk.Frame):
         if self._editor and self._editor[0] is ed:
             # The path, not focus_get(): that raises KeyError while a drop-down list has focus
             focus = str(self.tk.call("focus"))
-            if focus.startswith(str(ed)):
+            if focus.startswith(str(ed)) or (self._suggest is not None and focus == str(self._suggest)):
                 return
             self.close_editor(True)
 
@@ -323,9 +369,16 @@ class EditGrid(tk.Frame):
             return
         ed, iid, key, var = self._editor
         self._editor = None
+        col = next(c for c in self.cols if c["key"] == key)
+        sug, self._suggest = self._suggest, None
+        if sug is not None:  # Enter / Tab with the suggestions open takes the highlighted one
+            if commit and sug.winfo_ismapped() and sug.curselection():
+                picked = sug.get(sug.curselection()[0])
+                if var.get().strip().lower() not in (c.lower() for c in col["choices"]()):
+                    var.set(picked)
+            sug.destroy()
         if commit and self.tree.exists(iid):
             value = var.get().strip()
-            col = next(c for c in self.cols if c["key"] == key)
             if value and col.get("normalize"):
                 value = col["normalize"](value)
             if value != self.get(iid, key):

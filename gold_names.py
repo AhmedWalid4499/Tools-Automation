@@ -57,3 +57,59 @@ def lookup(names, text):
     """The list entry whose full name matches text (case/space-insensitive), else None."""
     key = " ".join(str(text).split()).lower()
     return next((e for e in names if full_name(e).lower() == key), None)
+
+
+# ---------- DPM teams (from the Org Chart: Search by Organization > Department "APM ...")
+TEAMS = {"APM Europe": "DPM Egypt", "APM APAC": "DPM India", "APM AME": "DPM Brazil"}
+NO_TEAM = "Other"
+
+
+def team_of(entry):
+    return entry.get("team") or NO_TEAM
+
+
+def letters(text):
+    """Only the letters, lower case: 'Ahmed El-Bourgy' -> 'ahmedelbourgy' (for forgiving name search)."""
+    import re
+    return re.sub(r"[^a-z]", "", str(text).lower())
+
+
+def matches(name, typed):
+    """Does a name fit what was typed? 'elbourgy', 'el bourgy', 'ahmed bour', 'Bourgy Ahmed' all fit
+    'Ahmed El Bourgy': every typed word, or the whole text without spaces, is part of the name."""
+    n = letters(name)
+    words = [letters(w) for w in str(typed).split()]
+    words = [w for w in words if w]
+    return not words or letters(typed) in n or all(w in n for w in words)
+
+
+def from_org_chart(rec, team):
+    """An Org Chart record -> a list entry. Display names are 'Maria Julia BENVENUTI' (last name in capitals)."""
+    words = str(rec.get("display_name") or "").split()
+    first = [w for w in words if not w.isupper()]
+    last = [w for w in words if w.isupper()]
+    if not first or not last:  # no capitals to go by: the legal names
+        first, last = [rec.get("legalFirstName", "")], [rec.get("legalLastName", "")]
+    cap = lambda ws: " ".join("-".join(p.capitalize() if p.isupper() else p for p in w.split("-")) for w in ws if w)
+    return {"first": cap(first), "last": cap(last),
+            "team": team, "email": (rec.get("email") or "").strip().lower()}
+
+
+def merge_team(names, people):
+    """Add Org Chart people (from_org_chart entries) to the list, or set the team of names already in it
+    (same email, or the same letters in either name order). Returns (added, updated)."""
+    added = updated = 0
+    for p in people:
+        keys = {letters(p["first"] + p["last"]), letters(p["last"] + p["first"])}
+        hit = next((e for e in names if (p["email"] and e.get("email") == p["email"])
+                    or letters(e["first"] + e["last"]) in keys), None)
+        if hit:
+            if hit.get("team") != p["team"] or (p["email"] and not hit.get("email")):
+                hit["team"] = p["team"]
+                if p["email"]:
+                    hit["email"] = p["email"]
+                updated += 1
+        else:
+            names.append(dict(p))
+            added += 1
+    return added, updated

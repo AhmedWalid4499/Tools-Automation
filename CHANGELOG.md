@@ -1,5 +1,16 @@
 # GOLD Express - what's new
 
+## 2.8.0
+- **DPM teams from the Org Chart**: DPM names > "Import DPM teams from Org Chart" reads the APM
+  departments (APM Europe = DPM Egypt, APM APAC = DPM India, APM AME = DPM Brazil), adds the
+  people and gives every name its team. Filter the list by team; set a name's team in Edit.
+- **Choose the DPM teams in Order assignment**: tick DPM Egypt / DPM India / DPM Brazil / Other
+  and only those names are offered (remembered for next time).
+- **Find a DPM by any part of the name**: type "elbourgy", "el bourgy" or "bourgy ahmed" in the
+  STM cell - the matching names show under the cell; pick with the arrows + Enter or a click.
+- **Dates in any format** (Revised Target Date): 6/12/2026, 6.12.26, 2026-12-06, Dec 6 2026,
+  6th December, 6 Dec (this year), Excel dates, today, tomorrow, +14 (days from today)...
+
 ## 2.7.0
 - **My Orders loads when you ask**: GOLD Express no longer reads your orders at start-up. Click
   "Get my orders" (or Refresh) on the My Orders page. Asking the GOLD bot about your orders also

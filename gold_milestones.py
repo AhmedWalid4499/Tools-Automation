@@ -68,27 +68,91 @@ TARGET_HIDDEN = "targetDate_tgtX$Date"
 TARGET_HELPER = "targetDate_tgtX$DateHelper"
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+MONTHS_FULL = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+               "november", "december"]
 
 
-def parse_date(text):
-    """'11-oct-2026', '6 Dec 2026', '06/12/2026', '2026-12-06', datetime -> date. Raises ValueError."""
+def parse_date(text, today=None):
+    """A date written (almost) any way -> date. Raises ValueError.
+    '11-oct-2026', '6 Dec 26', 'October 6th, 2026', 'Tue 6 Oct', '06/12/2026', '6.12.26', '2026-12-06',
+    '2026/12/06 00:00', '20261206', an Excel date number (46362), 'today', 'tomorrow', '+14' (days from today).
+    Numbers only are read day first (06/12 = 6 December) unless that is impossible (12/31 = 31 December).
+    Without a year: this year, or next year if that date has passed."""
     if isinstance(text, datetime):
         return text.date()
     if isinstance(text, date):
         return text
-    s = str(text).strip()
-    m = re.fullmatch(r"(\d{1,2})[-\s/.]([A-Za-z]{3,9})[-\s/.,]*(\d{4})", s)
+    today = today or date.today()
+    raw = " ".join(str(text).split())
+    s = raw.lower()
+    bad = ValueError(f"'{raw}' is not a date I can read (e.g. 11-Oct-2026)")
+    if s in ("today", "now"):
+        return today
+    if s == "tomorrow":
+        return date.fromordinal(today.toordinal() + 1)
+    m = re.fullmatch(r"\+\s*(\d{1,4})\s*(d|days?)?", s)
     if m:
-        mon = m.group(2)[:3].title()
-        if mon not in MONTHS:
-            raise ValueError(f"unknown month in '{s}'")
-        return date(int(m.group(3)), MONTHS.index(mon) + 1, int(m.group(1)))
-    for fmt in ("%d/%m/%Y", "%d.%m.%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        return date.fromordinal(today.toordinal() + int(m.group(1)))
+    s = re.sub(r"[t\s]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?\s*(am|pm)?$", "", s)  # a time after the date
+    if re.fullmatch(r"\d{5}(\.0+)?", s) and 20000 < float(s) < 80000:  # Excel's day number
+        return date.fromordinal(date(1899, 12, 30).toordinal() + int(float(s)))
+    if re.fullmatch(r"\d{8}", s):
+        for fmt in ("%Y%m%d", "%d%m%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                pass
+        raise bad
+    s = re.sub(r"(\d)(st|nd|rd|th)\b", r"\1", s)
+    words = re.findall(r"[a-z]+", s)
+    nums = [int(n) for n in re.findall(r"\d+", s)]
+    month = None
+    for w in words:
+        if w[:3].title() in MONTHS and (len(w) == 3 or MONTHS_FULL[MONTHS.index(w[:3].title())].startswith(w)
+                                        or w == "sept"):
+            month = MONTHS.index(w[:3].title()) + 1
+        elif w[:3] not in ("mon", "tue", "wed", "thu", "fri", "sat", "sun", "of"):
+            raise bad
+    year = day = None
+    if month:  # '6 Dec 2026', 'Dec 6 2026', '2026 Dec 6', '6 dec 26', '6 Dec'
+        if len(nums) == 2:
+            big = [n for n in nums if n > 31]
+            if big:
+                rest = list(nums)
+                rest.remove(big[0])
+                year, day = big[0], rest[0]
+            else:
+                day, year = nums
+        elif len(nums) == 1:
+            day = nums[0]
+        else:
+            raise bad
+    else:
+        if len(nums) == 3:
+            if nums[0] > 31:  # 2026-12-06
+                year, month, day = nums
+            else:
+                day, month, year = nums
+                if month > 12 and day <= 12:  # 12/31/2026: month first
+                    day, month = month, day
+        elif len(nums) == 2:
+            day, month = nums
+            if month > 12 and day <= 12:
+                day, month = month, day
+        else:
+            raise bad
+    if year is None:
         try:
-            return datetime.strptime(s, fmt).date()
+            guess = date(today.year, month, day)
         except ValueError:
-            pass
-    raise ValueError(f"'{s}' is not a date like 11-Oct-2026")
+            raise bad
+        return guess if guess >= today else date(today.year + 1, month, day)
+    if year < 100:
+        year += 2000
+    try:
+        return date(year, month, day)
+    except ValueError:
+        raise bad
 
 
 def gold_date(d):
