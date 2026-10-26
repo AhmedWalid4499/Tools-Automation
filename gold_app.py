@@ -2572,17 +2572,42 @@ class App(tk.Tk):
         self.oc_tree_copy = gui.TableCopy(self.oc_tree, self.log, menu=True)  # Excel-like copying
         for c, t, w in self.OC_COLUMNS:
             self.oc_tree.heading(c, text=t, anchor="w")
-            self.oc_tree.column(c, width=w, anchor="w")
+            self.oc_tree.column(c, width=w, anchor="w", stretch=False)  # full width: scroll sideways
         self.oc_tree.tag_configure("odd", background=gui.ZEBRA)
         self.oc_tree.tag_configure("missing", foreground=MUTED)
         sb = ttk.Scrollbar(tf, orient="vertical", command=self.oc_tree.yview)
-        self.oc_tree.configure(yscrollcommand=sb.set)
+        hsb = ttk.Scrollbar(tf, orient="horizontal", command=self.oc_tree.xview)  # wide columns
+        self.oc_tree.configure(yscrollcommand=sb.set, xscrollcommand=hsb.set)
         sb.pack(side="right", fill="y")
+        hsb.pack(side="bottom", fill="x")
         self.oc_tree.pack(side="left", fill="both", expand=True)
         self.oc_tree.bind("<<TreeviewSelect>>", lambda e: self._oc_show())
         panes.add(lt, weight=3)
         ct = self._tile(panes, pad=14)
-        self.oc_card = ct.body
+        # The person card (details + the "Reports to" chain) scrolls when it is taller than the tile
+        cv = self.oc_card_canvas = tk.Canvas(ct.body, background=CARD, highlightthickness=0, borderwidth=0)
+        vsb = ttk.Scrollbar(ct.body, orient="vertical", command=cv.yview)
+
+        def set_bar(lo, hi):
+            vsb.set(lo, hi)
+            if float(lo) <= 0 and float(hi) >= 1:
+                vsb.pack_forget()
+            elif not vsb.winfo_ismapped():
+                vsb.pack(side="right", fill="y", before=cv)
+        cv.configure(yscrollcommand=set_bar)
+        cv.pack(side="left", fill="both", expand=True)
+        self.oc_card = tk.Frame(cv, background=CARD)
+        win = cv.create_window(0, 0, window=self.oc_card, anchor="nw")
+        cv.bind("<Configure>", lambda e: cv.itemconfigure(win, width=e.width))
+        self.oc_card.bind("<Configure>", lambda e: cv.configure(scrollregion=(0, 0, e.width, e.height)))
+
+        def wheel(e):
+            w = e.widget if isinstance(e.widget, tk.Misc) else None
+            while w is not None and w is not cv:
+                w = getattr(w, "master", None)
+            if w is cv and cv.yview() != (0.0, 1.0):
+                cv.yview_scroll(int(-e.delta / 120), "units")
+        cv.bind_all("<MouseWheel>", wheel, add="+")
         panes.add(ct, weight=2)
 
         def place_sash(e=None):  # give the person card ~430 px, once the tab has its real size
@@ -2684,6 +2709,7 @@ class App(tk.Tk):
         c = self.oc_card
         for w in c.winfo_children():
             w.destroy()
+        self.oc_card_canvas.yview_moveto(0)
         tk.Label(c, text=p.get("display_name", ""), bg=CARD, fg=INK, font=(FONT, 14, "bold"),
                  anchor="w").pack(fill="x")
         tk.Label(c, text=p.get("busi_title") or p.get("note", ""), bg=CARD, fg=MUTED, font=(FONT, 10),
@@ -2727,7 +2753,7 @@ class App(tk.Tk):
                 name.pack(fill="x")
                 name.bind("<Button-1>", lambda e, m=m: self._oc_search(m.get("email") or m.get("display_name")))
                 tk.Label(txt, text=m.get("busi_title", ""), bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w",
-                         wraplength=340, justify="left").pack(fill="x")
+                         wraplength=max(320 - level * 14, 180), justify="left").pack(fill="x")
 
     @staticmethod
     def _oc_details(p):

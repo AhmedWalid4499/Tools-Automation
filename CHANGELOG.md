@@ -1,5 +1,9 @@
 # GOLD Express - what's new
 
+## 2.8.1
+- Org Chart: the person card with the "Reports to" tree now scrolls (scrollbar and mouse wheel)
+  when the manager chain is long; the results table scrolls sideways to show every column.
+
 ## 2.8.0
 - **DPM teams from the Org Chart**: DPM names > "Import DPM teams from Org Chart" reads the APM
   departments (APM Europe = DPM Egypt, APM APAC = DPM India, APM AME = DPM Brazil), adds the
