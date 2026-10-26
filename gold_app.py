@@ -36,6 +36,7 @@ import gold_names as gn
 import gold_orgchart as goc
 import gold_overview as go
 import gold_teams as gt
+import gold_tracker as gtr
 import gold_ui as gui
 import gold_update as gu
 from gold_grid import EditGrid
@@ -48,6 +49,7 @@ AI_KEY_CACHE = HERE / "ai_key.bin"  # the team's AI key, encrypted for this Wind
 OC_CACHE = HERE / "orgchart_cache.json"  # Org Chart lookups of GOLD team members (kept 7 days)
 MY_SNAPSHOT = HERE / "my_orders_snapshot.json"  # last My orders read, to notice changes
 CHATS_DIR = HERE / "chats"  # saved Ask GOLD chats
+TRACKER_COMMENTS = HERE / "tracker_comments.json"  # Overview > Tracker: comments / next steps per order
 OA_FILE = HERE / "apm_open_orders.xlsx"  # the latest APM Open Orders sheet (replaced on every refresh)
 
 # Palette (warm light background, white rounded panels, orange accent) - see gold_ui
@@ -2006,7 +2008,20 @@ class App(tk.Tk):
         tk.Label(h, text=title, bg=CARD, fg=INK, font=(FONT, 11, "bold")).pack(side="left")
         return h
 
-    def _build_overview_tab(self, f):
+    def _build_overview_tab(self, page):
+        # Two views of the same orders: Overview (counters + details) and Tracker (a sheet to share)
+        switch = tk.Frame(page, background=BG)
+        switch.pack(fill="x", padx=6, pady=(0, 8))
+        self.ov_view = tk.StringVar(value="overview")
+        for value, label in (("overview", "Overview"), ("tracker", "Tracker")):
+            ttk.Radiobutton(switch, text=label, value=value, variable=self.ov_view, style="Seg.TRadiobutton",
+                            command=self._ov_switch).pack(side="left", padx=(0, 4))
+        tk.Label(switch, text="Tracker: the same orders as a tracker sheet for management or customers",
+                 bg=BG, fg=MUTED, font=(FONT, 8)).pack(side="left", padx=10)
+        f = self.ov_main = tk.Frame(page, background=BG)
+        f.pack(fill="both", expand=True)
+        self.ov_tracker = tk.Frame(page, background=BG)  # built at the end (it shares the order box)
+
         # Colourful counters for all the orders read (same look as My Orders)
         strip = tk.Frame(f, background=BG)
         strip.pack(fill="x", padx=6, pady=(2, 8))
@@ -2025,7 +2040,7 @@ class App(tk.Tk):
         lower = tk.Frame(f, background=BG)
         lower.pack(fill="both", expand=True)
         lower.rowconfigure(0, weight=1)
-        lower.columnconfigure(0, weight=2, uniform="ovlower")   # orders
+        lower.columnconfigure(0, weight=1, uniform="ovlower")   # orders (a narrow list)
         lower.columnconfigure(1, weight=3, uniform="ovlower")   # the selected order's details
 
         # Orders: type them, read them, pick one
@@ -2044,8 +2059,8 @@ class App(tk.Tk):
         ent.pack(side="left", fill="x", expand=True)
         ent.bind("<Return>", lambda e: self._ov_run())
         self._btn(bar, "Show", self._ov_run, "Accent.TButton").pack(side="left", padx=(6, 0))
-        hint = tk.Label(left, text="One or more orders, separated by spaces or commas.  Red = target date "
-                                   f"passed, Amber = {go.AMBER_DAYS} days or less, Green = more.", bg=CARD,
+        hint = tk.Label(left, text=f"Orders separated by spaces or commas.  Red = date passed, Amber = "
+                                   f"{go.AMBER_DAYS} days or less.", bg=CARD,
                         fg=FAINT, font=(FONT, 8), anchor="w", justify="left")
         hint.pack(fill="x", pady=(0, 8))
         hint.bind("<Configure>", lambda e: hint.configure(wraplength=max(e.width - 4, 100)))
@@ -2055,8 +2070,8 @@ class App(tk.Tk):
                                     selectmode="browse")
         self.ov_list_copy = gui.TableCopy(self.ov_list, self.log, menu=True)  # Excel-like copying
         scale = self.winfo_fpixels("1i") / 96
-        for c, w, t in [("order", 95, "Order"), ("status", 70, "Status"), ("days", 110, "Days left"),
-                        ("lead", 80, "Lead time")]:
+        for c, w, t in [("order", 90, "Order"), ("status", 60, "Status"), ("days", 80, "Days left"),
+                        ("lead", 60, "Lead time")]:
             self.ov_list.heading(c, text=t, anchor="w")
             self.ov_list.column(c, width=int(w * scale), minwidth=int(50 * scale), anchor="w", stretch=True)
         for k, (fg, bg) in self.RAG_UI.items():
@@ -2101,6 +2116,7 @@ class App(tk.Tk):
         self.ov_cache = {}     # order -> (time read, overview dict)
         self.ov_errors = {}    # order -> error text
         self.ov_export_btn.state(["disabled"])
+        self._build_tracker(self.ov_tracker)
 
     OV_CACHE_MIN = 10        # an order read in the last 10 minutes is shown again instantly
     OV_PARALLEL_FROM = 3     # from this many orders, read with extra GOLD sessions side by side
@@ -2119,8 +2135,10 @@ class App(tk.Tk):
                                    + (f"\n\nNot an order number: {', '.join(bad)}" if bad else ""))
             return
         self.ov_results, self.ov_errors = {}, {}
+        self.ov_order_list = orders  # in the order typed (the tracker keeps it)
         self._ov_summary_set({})
         self.ov_list.delete(*self.ov_list.get_children())
+        self._tr_fill()
         now = time.time()
         todo = []
         for o in orders:
@@ -2136,6 +2154,7 @@ class App(tk.Tk):
                      f"(less than {self.OV_CACHE_MIN} min old) - Refresh reads GOLD again")
             self._ov_show_selected()
             self._refresh_action_state()
+            self._tr_fill()
             return
         w = self.worker
         lock = threading.Lock()
@@ -2215,6 +2234,7 @@ class App(tk.Tk):
                 if first:
                     self.ov_list.selection_set(first)
             self._refresh_action_state()
+            self.after(100, self._tr_fill)  # after the run (the Excel button is enabled once idle)
 
         w.submit(f"Reading {len(todo)} order(s)", job, done)
 
@@ -2222,6 +2242,7 @@ class App(tk.Tk):
         days = "" if ov["days_left"] is None else ov["rag_text"]
         self.ov_list.item(o, values=(o, ov["rag"], days, ov["lt_rag"]), tags=(ov["rag"],))
         self._ov_summary_set({k: v["rag"] for k, v in self.ov_results.items()})
+        self._tr_fill()
         if not self.ov_list.selection():
             self.ov_list.selection_set(o)
 
@@ -2309,6 +2330,153 @@ class App(tk.Tk):
             return
         self.log(f"Overview exported: {path}")
         if messagebox.askyesno(APP_NAME, f"Saved to\n{path}\n\nOpen it now?"):
+            os.startfile(path)
+
+    # ----- Overview > Tracker: the orders read as a tracker sheet for management or customers
+    def _ov_switch(self):
+        if self.ov_view.get() == "tracker":
+            self.ov_main.pack_forget()
+            self.ov_tracker.pack(fill="both", expand=True)
+            self._tr_fill()
+        else:
+            self.ov_tracker.pack_forget()
+            self.ov_main.pack(fill="both", expand=True)
+
+    def _build_tracker(self, f):
+        self.tr_comments = gtr.load_comments(TRACKER_COMMENTS)
+        self.ov_order_list = []
+        tt = self._tile(f, fill="both", expand=True)
+        body = tt.body
+        head = self._tile_head(body, "Order tracker", "")
+        self.tr_export_btn = self._btn(head, "⤓  Excel tracker", self._tr_export, "Accent.TButton")
+        self.tr_export_btn.pack(side="right")
+        self.tr_audience = tk.StringVar(value=self.settings.get("tracker_view", "management"))
+        seg = tk.Frame(head, background=CARD)
+        seg.pack(side="right", padx=12)
+        tk.Label(seg, text="For", bg=CARD, fg=MUTED, font=(FONT, 9)).pack(side="left", padx=(0, 6))
+        for value, label in gtr.VIEWS.items():
+            ttk.Radiobutton(seg, text=label, value=value, variable=self.tr_audience, style="SegSm.TRadiobutton",
+                            command=self._tr_audience_changed).pack(side="left", padx=(0, 4))
+
+        bar = tk.Frame(body, background=CARD)
+        bar.pack(fill="x", pady=(2, 4))
+        tk.Label(bar, text="Orders", bg=CARD, fg=MUTED, font=(FONT, 9)).pack(side="left", padx=(0, 6))
+        ent = ttk.Entry(bar, textvariable=self.ov_input, width=50, font=(FONT, 10))  # the same orders as Overview
+        ent.pack(side="left", fill="x", expand=True)
+        ent.bind("<Return>", lambda e: self._ov_run())
+        self._btn(bar, "Show", self._ov_run, "Accent.TButton").pack(side="left", padx=(6, 0))
+        self._btn(bar, "↻  Refresh", lambda: self._ov_run(refresh=True), "Small.TButton").pack(
+            side="left", padx=(6, 0))
+        tk.Label(bar, text="Prepared for", bg=CARD, fg=MUTED, font=(FONT, 9)).pack(side="left", padx=(16, 6))
+        self.tr_for = tk.StringVar()
+        ttk.Entry(bar, textvariable=self.tr_for, width=22).pack(side="left")
+        self.tr_hint = tk.Label(body, text="", bg=CARD, fg=FAINT, font=(FONT, 8), anchor="w")
+        self.tr_hint.pack(fill="x", pady=(0, 8))
+
+        tf = tk.Frame(body, background=CARD)
+        tf.pack(fill="both", expand=True)
+        self.tr_tree = ttk.Treeview(tf, show="headings", selectmode="extended")
+        self.tr_tree_copy = gui.TableCopy(self.tr_tree, self.log, menu=True)
+        for word, (fill, fnt) in gtr.RAG_FILLS.items():
+            self.tr_tree.tag_configure(word, foreground="#" + fnt)
+        self.tr_tree.tag_configure("odd", background=gui.ZEBRA)
+        ys = ttk.Scrollbar(tf, orient="vertical", command=self.tr_tree.yview)
+        xs = ttk.Scrollbar(tf, orient="horizontal", command=self.tr_tree.xview)
+        self.tr_tree.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
+        ys.pack(side="right", fill="y")
+        xs.pack(side="bottom", fill="x")
+        self.tr_tree.pack(side="left", fill="both", expand=True)
+        self.tr_tree.bind("<Double-1>", self._tr_edit)
+        self._tr_editor = None
+        self._tr_fill()
+
+    def _tr_audience_changed(self):
+        self.settings["tracker_view"] = self.tr_audience.get()
+        save_settings(self.settings)
+        self._tr_fill()
+
+    def _tr_orders(self):
+        return [self.ov_results[o] for o in self.ov_order_list if o in self.ov_results]
+
+    def _tr_fill(self):
+        if not hasattr(self, "tr_tree"):
+            return
+        view = self.tr_audience.get()
+        cols = gtr.columns(view)
+        t = self.tr_tree
+        t.delete(*t.get_children())
+        scale = self.winfo_fpixels("1i") / 96
+        t.configure(columns=[c[0] for c in cols])
+        for key, head, width, _, _ in cols:
+            t.heading(key, text=head, anchor="w")
+            t.column(key, width=int(width * 7.5 * scale), minwidth=int(60 * scale), anchor="w", stretch=False)
+        orders = self._tr_orders()
+        status_at = [c[0] for c in cols].index("status")
+        for i, (o, values) in enumerate(zip(orders, gtr.rows(orders, view, self.tr_comments))):
+            shown = [go.fmt(v) if isinstance(v, (date, datetime)) else ("" if v is None else v) for v in values]
+            tags = [values[status_at]] + (["odd"] if i % 2 else [])
+            t.insert("", "end", iid=o["order"], values=shown, tags=tags)
+        pending = [o for o in self.ov_order_list if o not in self.ov_results]
+        self.tr_hint.configure(text=(
+            f"{len(orders)} order(s)" + (f"  ·  {len(pending)} still being read" if pending and self.busy else "")
+            + "  ·  double-click the Comments / next steps cell to type  ·  "
+            + ("Customer view: only what a customer should see" if view == "customer"
+               else "Management view: everything, incl. STM, value and the latest GOLD note"))
+            if self.ov_order_list else "Type the orders above and press Show - they are read from GOLD "
+                                       "(read only), then shown here as a tracker.")
+        self.tr_export_btn.state(["!disabled"] if orders and not self.busy else ["disabled"])
+
+    def _tr_edit(self, e):
+        """Double-click the Comments cell: type a comment / next step (kept for next time)."""
+        t = self.tr_tree
+        iid, col = t.identify_row(e.y), t.identify_column(e.x)
+        if not iid or not col:
+            return
+        key = t["columns"][int(col[1:]) - 1]
+        if key != "comment":
+            return
+        box = t.bbox(iid, key)
+        if not box:
+            return
+        x, y, w, h = box
+        var = tk.StringVar(value=self.tr_comments.get(iid, ""))
+        ed = ttk.Entry(t, textvariable=var, font=(FONT, 10))
+        ed.place(x=x, y=y, width=max(w, 320), height=h)
+        ed.focus_set()
+        ed.select_range(0, "end")
+
+        def done(save=True):
+            if save:
+                text = " ".join(var.get().split())
+                self.tr_comments[iid] = text
+                try:
+                    gtr.save_comments(TRACKER_COMMENTS, self.tr_comments)
+                except OSError as ex:
+                    self.log(f"Could not save the comment: {ex}")
+                t.set(iid, "comment", text)
+            ed.destroy()
+        ed.bind("<Return>", lambda ev: done())
+        ed.bind("<Escape>", lambda ev: done(False))
+        ed.bind("<FocusOut>", lambda ev: done())
+
+    def _tr_export(self):
+        orders = self._tr_orders()
+        if not orders:
+            return
+        view = self.tr_audience.get()
+        who = self.tr_for.get().strip()
+        customers = sorted({o.get("customer", "") for o in orders if o.get("customer")})
+        name = re.sub(r"[^\w\- ]", "", who or (customers[0] if view == "customer" and len(customers) == 1 else ""))
+        path = (Path(self._ctx()["workbook"]).parent /
+                f"Order_tracker_{(name.strip().replace(' ', '_') + '_') if name.strip() else ''}"
+                f"{gtr.VIEWS[view]}_{datetime.now():%Y-%m-%d_%H%M}.xlsx")
+        try:
+            gtr.export(path, orders, view, self.tr_comments, prepared_for=who)
+        except PermissionError:
+            messagebox.showerror(APP_NAME, f"{path.name} is open in Excel. Close it and try again.")
+            return
+        self.log(f"Tracker saved ({gtr.VIEWS[view]} view): {path}")
+        if messagebox.askyesno(APP_NAME, f"Tracker with {len(orders)} order(s) saved to\n{path}\n\nOpen it now?"):
             os.startfile(path)
 
     # ----- shared pieces of the bulk tabs (Revised Target Date, Bulk Order Assignment)

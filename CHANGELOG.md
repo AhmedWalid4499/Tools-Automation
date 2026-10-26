@@ -1,5 +1,15 @@
 # GOLD Express - what's new
 
+## 2.12.0
+- **New: Tracker** (Overview > Tracker) - the orders you type in the Overview as a tracker to share:
+  project, site, service, status, target delivery date, delivery status, next milestone and your own
+  **Comments / next steps** (double-click to type; kept for next time).
+  - **For Management**: everything, incl. customer, STM, 120-day lead time, order value and the
+    latest GOLD note. **For Customer**: only what a customer should see, in plain words.
+  - **Excel tracker**: a ready-to-send sheet - title, "prepared for", status counts, coloured
+    delivery status, filters, one landscape page wide when printed - plus a page per order.
+- The Overview's order list is narrower, so the order details get more room.
+
 ## 2.11.0
 - **Order Assignment dashboard in Excel**: "Excel dashboard" (Order Assignment tab) saves a
   workbook with a Dashboard sheet - headline numbers (open, assigned, unassigned, not in the DPM
