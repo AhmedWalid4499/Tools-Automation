@@ -1602,7 +1602,7 @@ class App(tk.Tk):
         tt = self._tile(lower)
         tt.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         head = self._tile_head(tt.body, "Orders", "")
-        ttk.Button(head, text="⤓  Excel", style="Small.TButton", command=self._oa_export).pack(side="right")
+        ttk.Button(head, text="⤓  Excel dashboard", style="Small.TButton", command=self._oa_export).pack(side="right")
         self._btn(head, "↻  Refresh", lambda: self._oa_load(force=True), "Small.TButton").pack(side="right", padx=6)
         self.oa_info = tk.Label(head, text="", bg=CARD, fg=MUTED, font=(FONT, 9))
         self.oa_info.pack(side="right", padx=6)
@@ -1968,25 +1968,35 @@ class App(tk.Tk):
         rows = self._oa_rows()
         if not rows:
             return
+        """The orders shown (current filters) as an Excel dashboard: headline numbers, charts and the data."""
+        import gold_assign_dashboard as gad
         path = Path(self._ctx()["workbook"]).parent / f"Order_assignment_{datetime.now():%Y-%m-%d_%H%M%S}.xlsx"
-        cols = [("Order", "order"), ("Status", "status"), ("Type", "type"), ("Customer", "customer"),
-                ("End customer", "end_customer"), ("STM (DPM)", "dpm"), ("Assignment", "category"),
-                ("Region", "region"), ("DPM team", "team"), ("Target date", "target"),
-                ("Initial target date", "ittd"), ("Revised target date", "rtdd"), ("Days to due", "due_days"),
-                ("Backlog", "backlog"), ("Order age", "age"), ("Cust. site ref", "site_ref"), ("Country", "country"),
-                ("Sales cluster", "cluster"), ("Service", "service"), ("Project", "project")]
-        try:
-            gx.write_sheet(path, "Order assignment",
-                           [f"APM open orders  ·  {len(rows)} shown  ·  sheet from "
-                            f"{datetime.fromtimestamp(self.oa_time):%d-%b-%Y %H:%M}"],
-                           [("Orders", [c for c, _ in cols],
-                             [[gas.fmt_date(o.get(k)) if isinstance(o.get(k), date) else
-                               ("" if o.get(k) is None else o.get(k)) for _, k in cols] for o in rows])])
-        except PermissionError:
-            messagebox.showerror(APP_NAME, f"{path.name} is open in Excel. Close it and try again.")
-            return
-        if messagebox.askyesno(APP_NAME, f"Saved {len(rows)} orders to\n{path}\n\nOpen it now?"):
-            os.startfile(path)
+        source = (f"{gas.file_name(self._oa_link())}, refreshed on SharePoint "
+                  f"{datetime.fromtimestamp(self.oa_time):%d-%b-%Y %H:%M}")
+        parts = [p for p in (dict(self.OA_SHOWS).get(self.oa_show.get()) if self.oa_show.get() != "all" else "",
+                             self.oa_region.get() if self.oa_region.get() != "All regions" else "",
+                             self.oa_dpm.get().strip(),
+                             f"search “{self.oa_search.get().strip()}”" if self.oa_search.get().strip() else "")
+                 if p]
+        filt = ("Filter: " + ", ".join(parts)) if parts else "All orders"
+        self.oa_info.configure(text="Building the dashboard...")
+        self.log(f"Order Assignment: building the Excel dashboard ({len(rows):,} orders)...")
+
+        def work():  # a few seconds for 10,000 orders: off the UI thread
+            try:
+                gad.export(path, rows, source, filt)
+            except Exception as e:
+                self.ui(lambda e=e: (self._oa_fill(), messagebox.showerror(
+                    APP_NAME, f"The dashboard could not be saved:\n\n{e}")))
+                return
+            self.ui(lambda: finished())
+
+        def finished():
+            self._oa_fill()
+            self.log(f"Order Assignment dashboard saved: {path}")
+            if messagebox.askyesno(APP_NAME, f"Dashboard with {len(rows):,} orders saved to\n{path}\n\nOpen it now?"):
+                os.startfile(path)
+        threading.Thread(target=work, daemon=True).start()
 
     def _tile_head(self, parent, title, icon):
         """A tile's title row (icon + bold title); returns the row so buttons can go on its right."""

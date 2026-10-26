@@ -192,6 +192,14 @@ def summary(orders):
             "outsiders": len({o["dpm"] for o in orders if o["category"] == NOT_IN_LIST})}
 
 
+def is_overdue(o):
+    """Past its target date: 'Days to Due Date' below 0 (else the sheet's Backlog says 'Overdue RTDD')."""
+    d = o.get("due_days")
+    if isinstance(d, (int, float)):
+        return d < 0
+    return str(o.get("backlog") or "").strip().lower().startswith("overdue rtdd")
+
+
 def per_person(orders):
     """[(name, region or category, number of orders, overdue)] for every STM, most orders first."""
     count, overdue, where = {}, {}, {}
@@ -200,7 +208,7 @@ def per_person(orders):
             continue
         k = o["dpm"]
         count[k] = count.get(k, 0) + 1
-        overdue[k] = overdue.get(k, 0) + (1 if str(o.get("backlog") or "").lower() == "overdue" else 0)
+        overdue[k] = overdue.get(k, 0) + (1 if is_overdue(o) else 0)
         where[k] = o["region"] if o["category"] == ASSIGNED else NOT_IN_LIST
     return sorted(((k, where[k], count[k], overdue[k]) for k in count), key=lambda r: (-r[2], r[0].lower()))
 

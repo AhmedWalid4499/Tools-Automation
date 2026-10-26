@@ -1,5 +1,14 @@
 # GOLD Express - what's new
 
+## 2.11.0
+- **Order Assignment dashboard in Excel**: "Excel dashboard" (Order Assignment tab) saves a
+  workbook with a Dashboard sheet - headline numbers (open, assigned, unassigned, not in the DPM
+  list, DPMs with orders, overdue) and charts: who has the orders, assigned orders per region,
+  assignment by order status, top 15 DPMs, top 15 STMs not in the DPM list, and unassigned orders
+  by sales cluster and by age - plus sheets with all orders, the unassigned ones, the ones with
+  people not in the DPM list, and orders per STM (with filters). It follows the tab's filters.
+- "Overdue" now means past the target date (Days to Due Date below 0).
+
 ## 2.10.1
 - **Order Assignment is live on the sheet's link**: every time you open the tab (at most every
   30 minutes) GOLD Express asks SharePoint whether the APM Open Orders sheet has a newer version and
