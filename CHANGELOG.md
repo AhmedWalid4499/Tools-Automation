@@ -1,5 +1,12 @@
 # GOLD Express - what's new
 
+## 2.7.0
+- **My Orders loads when you ask**: GOLD Express no longer reads your orders at start-up. Click
+  "Get my orders" (or Refresh) on the My Orders page. Asking the GOLD bot about your orders also
+  reads them. Order notifications start once your orders have been read.
+- **Smoother maximize / restore / minimize**: the window no longer shows half-drawn tiles and
+  black patches while it changes size.
+
 ## 2.6.1
 - Fixed: picking a name from the drop-down list in Order assignment (and other lists in the bulk
   tables) showed an error.

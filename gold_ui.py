@@ -5,6 +5,7 @@ Tkinter draws only square shapes, so every rounded or gradient surface is an ima
 when its size changes.
 """
 import tkinter as tk
+import weakref
 from pathlib import Path
 from tkinter import font as tkfont
 
@@ -168,12 +169,65 @@ def fit_text(text, font, width, lines=999):
     return "\n".join(out)
 
 
+def smooth_window_changes(root):
+    """Maximize / restore / un-minimize: lay the window out and redraw every rounded tile in one go,
+    instead of tile by tile a moment later (which looked like a glitch). Drag-resizing is unchanged."""
+    st = {"state": root.state(), "size": None, "job": None}
+    cover = tk.Frame(root, background=BG)  # a plain page shown while everything moves into place
+
+    def uncover():
+        st["job"] = None
+        _Redraw.redraw_all(root)
+        cover.place_forget()
+
+    def changed(e):
+        if e.widget is not root:
+            return
+        state, size = root.state(), (e.width, e.height)
+        jump = st["size"] and (abs(size[0] - st["size"][0]) > 200 or abs(size[1] - st["size"][1]) > 200)
+        new_state = state != st["state"]
+        st["state"], st["size"] = state, size
+        if state != "iconic" and (new_state or jump):
+            cover.place(x=0, y=0, relwidth=1, relheight=1)
+            cover.lift()
+            if st["job"]:
+                root.after_cancel(st["job"])
+            st["job"] = root.after(150, uncover)
+
+    def minimized(e):  # covered while minimized, so coming back shows no half-drawn (black) parts
+        if e.widget is root:
+            cover.place(x=0, y=0, relwidth=1, relheight=1)
+            cover.lift()
+
+    def shown(e):
+        if e.widget is root and cover.winfo_manager():
+            if st["job"]:
+                root.after_cancel(st["job"])
+            st["job"] = root.after(150, uncover)
+
+    root.bind("<Configure>", changed, add="+")
+    root.bind("<Unmap>", minimized, add="+")
+    root.bind("<Map>", shown, add="+")
+
+
 class _Redraw:
     """Redraw a canvas a moment after its size changes (resizing the window stays smooth)."""
+    _all = weakref.WeakSet()
+
+    @classmethod
+    def redraw_all(cls, root):
+        root.update_idletasks()  # the new layout, all at once
+        for w in list(cls._all):
+            try:
+                if w.winfo_ismapped():
+                    w._check()
+            except tk.TclError:
+                pass
 
     def _watch(self):
         self._size = None
         self._pending = None
+        _Redraw._all.add(self)
         self.bind("<Configure>", self._soon, add="+")
 
     def _soon(self, e=None):

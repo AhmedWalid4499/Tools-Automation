@@ -346,9 +346,15 @@ class GoldReader:
 
     def _my_orders(self, q):
         orders = getattr(self.app, "my_orders", None) or []
+        if not getattr(self.app, "my_time", None):  # not read yet (My Orders loads on request): read it now
+            import gold_myorders as gmo
+            w = self.app.worker
+            w.ensure_browser()
+            self.app.log("Ask GOLD: reading your orders...")
+            orders = gmo.read_my_orders(w.driver, w.wait, self.app.log)
+            self.app.ui(lambda o=orders: self.app._my_loaded(o))
         if not orders:
-            return ("My orders has not been read yet (open the My Orders page or wait for it to load). Use "
-                    "read_order_tab for a specific order instead.")
+            return "There are no orders in My orders."
         keep = ("order", "customer", "cust_site_ref", "status", "service", "ittd_date", "type", "orange_site_ref",
                 "site_id", "ban", "sales_country")
         rows = [{k: o.get(k, "") for k in keep} for o in orders

@@ -338,6 +338,7 @@ class App(tk.Tk):
         self._build()
         self.report_callback_exception = self._callback_error
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        gui.smooth_window_changes(self)  # no half-drawn frames when maximizing / restoring
         self.after(100, self._pump)
         self.online = True
         threading.Thread(target=self._watch_connection, daemon=True).start()
@@ -363,8 +364,7 @@ class App(tk.Tk):
             except Exception:
                 pass
             return True
-        self.worker.submit("Connecting to GOLD", warm, lambda _: (self.log("Connected to GOLD - ready."),
-                                                                  self._my_page_shown()))  # fill My Orders
+        self.worker.submit("Connecting to GOLD", warm, lambda _: self.log("Connected to GOLD - ready."))
 
     # ----- thread-safe UI helpers
     def ui(self, fn):
@@ -671,6 +671,8 @@ class App(tk.Tk):
             self._set_pill("Offline - waiting for network", "#FF8A80", "#2A2A2A")
         for b in self.buttons:
             b.state(["!disabled"])
+        if hasattr(self, "my_empty_hint") and not self.my_time:  # e.g. reading My orders failed
+            self.my_empty_hint.configure(text="Click below to read your orders from GOLD (My orders only).")
         self.configure(cursor="")
         self._refresh_action_state()
 
@@ -1138,7 +1140,6 @@ class App(tk.Tk):
                   ("status", "Order status", 105), ("target", "Target date", 95), ("service", "Service", 200),
                   ("type", "Type", 90), ("orange_site_ref", "Orange site ref", 240))
     MY_SHOWN = ("order", "customer", "cust_site_ref", "status", "target")  # the rest is in the Excel export
-    MY_CACHE_MIN = 10
 
     def _build_my_tab(self, f):
         self.my_frame = f
@@ -1237,20 +1238,23 @@ class App(tk.Tk):
         self.my_tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self.my_tree.pack(side="left", fill="both", expand=True)
+        # Until the user asks for them, the table shows a "Get my orders" button (nothing is read at start-up)
+        self.my_empty = tk.Frame(tf, background=CARD)
+        tk.Label(self.my_empty, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 26)).pack(pady=(0, 6))
+        tk.Label(self.my_empty, text="Your orders are not loaded yet", bg=CARD, fg=INK,
+                 font=(FONT, 12, "bold")).pack()
+        self.my_empty_hint = tk.Label(self.my_empty, text="Click below to read your orders from GOLD "
+                                      "(My orders only).", bg=CARD, fg=MUTED, font=(FONT, 9))
+        self.my_empty_hint.pack(pady=(2, 10))
+        self.my_get = self._btn(self.my_empty, "↓  Get my orders", self._my_load, "Accent.TButton")
+        self.my_get.pack()
         self.my_tree.bind("<Double-1>", lambda e: self._my_open())
         self.my_tree.bind("<Return>", lambda e: self._my_open())
         self.my_tree.bind("<Button-3>", self._my_menu)
         self.my_sort_key = ("target", False)
-        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._my_page_shown(), add="+")
         self._my_render()
 
-    # --- loading
-    def _my_page_shown(self):
-        if self.notebook.current() is not self.my_frame or self.busy:
-            return
-        if not self.my_time or time.time() - self.my_time > self.MY_CACHE_MIN * 60:
-            self._my_load()
-
+    # --- loading (only when the user asks: "Get my orders" / Refresh)
     def _my_load(self, refresh=False, background=False):
         if self.busy:
             return
@@ -1261,14 +1265,16 @@ class App(tk.Tk):
             self.log("Reading your orders from GOLD (My orders only)...")
             return gmo.read_my_orders(w.driver, w.wait, self.log)
 
-        def done(orders):
-            self.my_orders, self.my_time = orders, time.time()
-            self.log(f"My orders: {len(orders)} order(s) read from GOLD")
-            self._my_render()
-            self._my_changes(orders)
-
         self.my_info.configure(text="Reading GOLD...")
-        w.submit("Checking my orders" if background else "Reading my orders", job, done, retry=True)
+        if not background:
+            self.my_empty_hint.configure(text="Reading your orders from GOLD - this takes a few seconds...")
+        w.submit("Checking my orders" if background else "Reading my orders", job, self._my_loaded, retry=True)
+
+    def _my_loaded(self, orders):
+        self.my_orders, self.my_time = orders, time.time()
+        self.log(f"My orders: {len(orders)} order(s) read from GOLD")
+        self._my_render()
+        self._my_changes(orders)
 
     # --- watching My orders for changes (Windows notifications)
     def _my_watch(self):
@@ -1279,7 +1285,7 @@ class App(tk.Tk):
             every = int(self.notify_every.get()) * 60
         except ValueError:
             every = 1800
-        due = not self.my_time or time.time() - self.my_time >= every
+        due = self.my_time and time.time() - self.my_time >= every  # only once the user has got them
         idle = time.time() - getattr(self, "_last_input", 0) >= 60 or not self._app_in_front()
         if (self.notify_on.get() and self.notify_orders.get() and due and idle and not self.busy
                 and self.worker.driver is not None):
@@ -1332,8 +1338,12 @@ class App(tk.Tk):
     def _my_render(self):
         s = gmo.summary(self.my_orders)
         loaded = self.my_time is not None
+        if loaded:
+            self.my_empty.place_forget()
+        else:
+            self.my_empty.place(relx=0.5, rely=0.45, anchor="center")
         n = lambda v: str(v) if loaded else "-"
-        self.my_cards["total"].set(n(s["total"]), "in My orders" if loaded else "reading GOLD...")
+        self.my_cards["total"].set(n(s["total"]), "in My orders" if loaded else "not loaded yet")
         self.my_cards["open"].set(n(s["open"]), f"{s['closed']} closed" if loaded else "")
         self.my_cards["due"].set(n(s["due_30"]), "target in 30 days" if loaded else "")
         self.my_cards["late"].set(n(s["late"]), "still open" if loaded else "")
