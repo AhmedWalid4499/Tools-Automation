@@ -1,5 +1,16 @@
 # GOLD Express - what's new
 
+## 2.10.0
+- **New: Order Assignment** - which DPM has which open APM order. It reads the "Power BI - APM
+  Open Orders" sheet straight from its SharePoint link (with your Orange sign-in), once a day when
+  you open the tab - the sheet is refreshed daily - or whenever you click Refresh.
+  - Counters for all orders, assigned to DPMs, **unassigned**, and assigned to people who are **not
+    in the DPM list**.
+  - Filter by region (APM Europe, APM APAC, APM AME), by STM name (type any part, e.g. "elshazly")
+    or search anything; "Orders per STM" lists everyone with their number of orders - click a name.
+  - Right-click orders to open them or to assign a DPM in Bulk assignment; export to Excel.
+- The bulk tab is now called **Bulk assignment**.
+
 ## 2.9.0
 Safety fixes from a full check of the app:
 - **No duplicate updates**: running Revised Target Date or Order assignment again (e.g. after Stop)

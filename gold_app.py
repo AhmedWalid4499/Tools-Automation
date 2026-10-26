@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import traceback
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import tkinter as tk
@@ -26,6 +26,7 @@ from PIL import ImageTk
 from selenium.webdriver.support.ui import WebDriverWait
 
 import gold_ai as gai
+import gold_assignments as gas
 import gold_extract as gx
 import gold_markdown as gmd
 import gold_milestones as gm
@@ -47,6 +48,7 @@ AI_KEY_CACHE = HERE / "ai_key.bin"  # the team's AI key, encrypted for this Wind
 OC_CACHE = HERE / "orgchart_cache.json"  # Org Chart lookups of GOLD team members (kept 7 days)
 MY_SNAPSHOT = HERE / "my_orders_snapshot.json"  # last My orders read, to notice changes
 CHATS_DIR = HERE / "chats"  # saved Ask GOLD chats
+OA_FILE = HERE / "apm_open_orders.xlsx"  # the latest APM Open Orders sheet (replaced on every refresh)
 
 # Palette (warm light background, white rounded panels, orange accent) - see gold_ui
 ORANGE = gui.ORANGE
@@ -929,21 +931,23 @@ class App(tk.Tk):
             return tk.Frame(content_host, background=BG)
 
         my, overview, explorer, ask = page(), page(), page(), page(False)
-        rtdd, assign = page(), page()
+        rtdd, assign, oa = page(), page(), page()
         org, names = page(False), page()
         self.org_frame, self.explorer_frame, self.overview_frame = org, explorer, overview
-        self.my_frame = my
+        self.my_frame, self.oa_frame = my, oa
         nav.section("Orders")
         nav.add(my, "My Orders", "", "Your orders in GOLD (My orders only) at a glance")
+        nav.add(oa, "Order Assignment", "",
+                "Which DPM has which APM order - from the APM Open Orders sheet (refreshed daily)")
         nav.add(overview, "Overview", "", "Key facts and delivery status of your orders")
         nav.add(explorer, "Order explorer", "", "Open an order, browse its tabs, export and download")
         nav.add(ask, "GOLD bot", "", "The Friendly GOLD bot - ask about deadlines, pricing, sites and people")
         nav.section("Bulk updates")
         nav.add(rtdd, "Revised Target Date", "", "Add the Revised Target Date milestone to many orders")
-        nav.add(assign, "Order assignment", "", "Make a DPM the primary STM of many orders")
+        nav.add(assign, "Bulk assignment", "", "Make a DPM the primary STM of many orders")
         nav.section("People")
         nav.add(org, "Org Chart", "", "Find anyone at Orange Business and who they report to")
-        nav.add(names, "DPM names", "", "The DPM list used by Order assignment")
+        nav.add(names, "DPM names", "", "The DPM list used by Order Assignment and Bulk assignment")
 
         self.update_btn = ttk.Button(nav.bottom, text="↻  Check for updates", style="Side.TButton",
                                      command=lambda: self._check_updates(quiet=False))
@@ -956,6 +960,7 @@ class App(tk.Tk):
                  font=(FONT, 8), anchor="w").pack(fill="x", padx=12, pady=(10, 0))
         self.bulk_stop_flag = threading.Event()
         self._build_my_tab(my)
+        self._build_oa_tab(oa)
         self._build_overview_tab(overview)
         self._build_explorer(explorer)
         self._build_rtdd_tab(rtdd)
@@ -968,6 +973,8 @@ class App(tk.Tk):
     def _page_changed(self, title, subtitle):
         self.page_title.configure(text=title)
         self.page_sub.configure(text=subtitle)
+        if title == "Order Assignment" and hasattr(self, "oa_tree"):
+            self.after(50, self._oa_shown)
 
     def _asset_path(self, name):
         for base in (BUNDLE_DIR / "assets", Path(__file__).parent / "assets"):
@@ -1537,6 +1544,395 @@ class App(tk.Tk):
     # ----- Overview tab
     RAG_UI = {"Red": (gui.RED_FG, gui.RED_BG), "Amber": (gui.AMBER_FG, gui.AMBER_BG),
               "Green": (gui.GREEN_FG, gui.GREEN_BG), "No date": (gui.GREY_FG, gui.GREY_BG)}
+
+    # ----- Order Assignment tab: which DPM has which open APM order (APM Open Orders sheet, refreshed daily)
+    OA_COLUMNS = (("order", "Order", 95), ("status", "Status", 85), ("customer", "Customer", 190),
+                  ("dpm", "STM (DPM)", 150), ("region", "Region", 95), ("target", "Target date", 95),
+                  ("due_days", "Days to due", 80), ("site_ref", "Cust. site ref", 110), ("country", "Country", 100))
+    OA_SHOWS = (("all", "All"), (gas.ASSIGNED, "Assigned"), (gas.UNASSIGNED, "Unassigned"),
+                (gas.NOT_IN_LIST, "Not in DPM list"))
+
+    def _build_oa_tab(self, f):
+        self.oa_orders, self.oa_time, self.oa_loading = [], None, False
+        self.oa_sort = ("target", False)
+
+        kpi = tk.Frame(f, background=BG)
+        kpi.pack(fill="x", padx=6, pady=(2, 8))
+        self.oa_cards = {}
+        for col, (key, caption, icon, palette, show) in enumerate((
+                ("total", "Open APM orders", "", "v_blue", "all"),
+                ("assigned", "Assigned to DPMs", "", "v_green", gas.ASSIGNED),
+                ("unassigned", "Unassigned", "", "v_rose", gas.UNASSIGNED),
+                ("not_in_list", "Not in DPM list", "", "v_orange", gas.NOT_IN_LIST),
+                ("dpms", "DPMs with orders", "", "v_purple", gas.ASSIGNED))):
+            card = gui.StatCard(kpi, caption, icon, palette, sub_lines=1, big_size=15,
+                                command=lambda s=show: self._oa_filter(show=s, dpm=""))
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
+            kpi.columnconfigure(col, weight=1, uniform="oakpi")
+            self.oa_cards[key] = card
+
+        lower = tk.Frame(f, background=BG)
+        lower.pack(fill="both", expand=True)
+        lower.rowconfigure(0, weight=1)
+        lower.columnconfigure(0, weight=3, uniform="oalower")
+        lower.columnconfigure(1, weight=1, uniform="oalower")
+        scale = self.winfo_fpixels("1i") / 96
+
+        # The orders (left)
+        tt = self._tile(lower)
+        tt.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        head = self._tile_head(tt.body, "Orders", "")
+        ttk.Button(head, text="⤓  Excel", style="Small.TButton", command=self._oa_export).pack(side="right")
+        self._btn(head, "↻  Refresh", lambda: self._oa_load(force=True), "Small.TButton").pack(side="right", padx=6)
+        self.oa_info = tk.Label(head, text="", bg=CARD, fg=MUTED, font=(FONT, 9))
+        self.oa_info.pack(side="right", padx=6)
+
+        bar = tk.Frame(tt.body, background=CARD)
+        bar.pack(fill="x", pady=(0, 8))
+        tk.Label(bar, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 12)).pack(side="left", padx=(2, 6))
+        self.oa_search = tk.StringVar()
+        ent = ttk.Entry(bar, textvariable=self.oa_search, width=14)
+        ent.pack(side="left")
+        ent.bind("<KeyRelease>", lambda e: self._oa_fill())
+        self.oa_show = tk.StringVar(value="all")
+        seg = tk.Frame(bar, background=CARD)
+        seg.pack(side="left", padx=10)
+        for value, label in self.OA_SHOWS:
+            ttk.Radiobutton(seg, text=label, value=value, variable=self.oa_show, style="SegSm.TRadiobutton",
+                            command=lambda: self._oa_filter(show=self.oa_show.get())).pack(side="left", padx=(0, 4))
+        filt = tk.Frame(tt.body, background=CARD)
+        filt.pack(fill="x", pady=(0, 8))
+        ttk.Label(filt, text="Region", style="Muted.TLabel").pack(side="left", padx=(2, 6))
+        self.oa_region = tk.StringVar(value="All regions")
+        self.oa_region_cb = ttk.Combobox(filt, textvariable=self.oa_region, state="readonly", width=16)
+        self.oa_region_cb.pack(side="left")
+        self.oa_region_cb.bind("<<ComboboxSelected>>", lambda e: self._oa_filter(region=self.oa_region.get(), dpm=""))
+        ttk.Label(filt, text="STM (DPM)", style="Muted.TLabel").pack(side="left", padx=(14, 6))
+        self.oa_dpm = tk.StringVar()
+        self.oa_dpm_cb = ttk.Combobox(filt, textvariable=self.oa_dpm, width=26)
+        self.oa_dpm_cb.pack(side="left")
+
+        def dpm_typed(e):
+            if e.keysym in ("Up", "Down", "Escape"):
+                return
+            if e.keysym == "Return":
+                fits = [n for n in self._oa_people() if gn.matches(n, self.oa_dpm.get())]
+                if len(fits) == 1:
+                    self.oa_dpm.set(fits[0])
+                self._oa_fill()
+                return
+            typed = self.oa_dpm.get().strip()
+            self.oa_dpm_cb.configure(values=[n for n in self._oa_people() if gn.matches(n, typed)])
+            self._oa_fill()
+        self.oa_dpm_cb.bind("<KeyRelease>", dpm_typed)
+        self.oa_dpm_cb.bind("<<ComboboxSelected>>", lambda e: self._oa_fill())
+        self.oa_chip = gui.Pill(filt, "", ORANGE_DARK, ORANGE_SOFT, bg=CARD,
+                                command=lambda: self._oa_filter(show="all", region="All regions", dpm=""))
+
+        tf = tk.Frame(tt.body, background=CARD)
+        tf.pack(fill="both", expand=True)
+        self.oa_tree = ttk.Treeview(tf, columns=[c for c, _, _ in self.OA_COLUMNS], show="headings",
+                                    selectmode="extended")
+        self.oa_tree_copy = gui.TableCopy(self.oa_tree, self.log, menu=False)
+        for c, t, w in self.OA_COLUMNS:
+            self.oa_tree.heading(c, text=t, anchor="w", command=lambda c=c: self._oa_sort_by(c))
+            self.oa_tree.column(c, width=int(w * scale), minwidth=int(60 * scale), anchor="w", stretch=True)
+        self.oa_tree.tag_configure(gas.UNASSIGNED, foreground=RED)
+        self.oa_tree.tag_configure(gas.NOT_IN_LIST, foreground=ORANGE_DARK)
+        self.oa_tree.tag_configure("odd", background=gui.ZEBRA)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.oa_tree.yview)
+        self.oa_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.oa_tree.pack(side="left", fill="both", expand=True)
+        self.oa_tree.bind("<Double-1>", lambda e: self._oa_open())
+        self.oa_tree.bind("<Button-3>", self._oa_menu)
+        self.oa_empty = tk.Frame(tf, background=CARD)
+        tk.Label(self.oa_empty, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 26)).pack(pady=(0, 6))
+        tk.Label(self.oa_empty, text="Open APM orders and their DPMs", bg=CARD, fg=INK,
+                 font=(FONT, 12, "bold")).pack()
+        self.oa_empty_hint = tk.Label(self.oa_empty, text="Read from the APM Open Orders sheet on SharePoint "
+                                      "(refreshed every day).", bg=CARD, fg=MUTED, font=(FONT, 9))
+        self.oa_empty_hint.pack(pady=(2, 10))
+        self._btn(self.oa_empty, "↓  Get the latest orders", lambda: self._oa_load(force=True),
+                  "Accent.TButton").pack()
+
+        # Orders per person (right): click a name to see their orders
+        pt = self._tile(lower)
+        pt.grid(row=0, column=1, sticky="nsew")
+        self._tile_head(pt.body, "Orders per STM", "")
+        pf = tk.Frame(pt.body, background=CARD)
+        pf.pack(fill="both", expand=True)
+        self.oa_people = ttk.Treeview(pf, columns=("name", "where", "n"), show="headings", selectmode="browse")
+        for c, t, w, anchor in (("name", "Name", 140, "w"), ("where", "Region", 90, "w"), ("n", "Orders", 55, "e")):
+            self.oa_people.heading(c, text=t, anchor=anchor)
+            self.oa_people.column(c, width=int(w * scale), anchor=anchor, stretch=c != "n")
+        self.oa_people.tag_configure(gas.NOT_IN_LIST, foreground=ORANGE_DARK)
+        self.oa_people.tag_configure("odd", background=gui.ZEBRA)
+        psb = ttk.Scrollbar(pf, orient="vertical", command=self.oa_people.yview)
+        self.oa_people.configure(yscrollcommand=psb.set)
+        psb.pack(side="right", fill="y")
+        self.oa_people.pack(side="left", fill="both", expand=True)
+        self.oa_people.bind("<<TreeviewSelect>>", lambda e: self._oa_person_picked())
+        self.oa_people_note = tk.Label(pt.body, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w",
+                                       justify="left", wraplength=int(260 * scale))
+        self.oa_people_note.pack(fill="x", pady=(6, 0))
+        self._oa_render()
+
+    # --- loading: from the SharePoint link, at most once a day (or on Refresh); one copy is kept, overwritten
+    def _oa_shown(self):
+        if self.oa_loading:
+            return
+        fetched = self.settings.get("oa_fetched", 0)
+        fresh = OA_FILE.exists() and datetime.fromtimestamp(fetched).date() == datetime.now().date()
+        if fresh and not self.oa_time:
+            self._oa_read_file()  # today's sheet is already here: just read it
+        elif not fresh:
+            self._oa_load()
+
+    def _oa_load(self, force=False):
+        """Get the latest sheet from the SharePoint link (it replaces yesterday's), then read it."""
+        if self.busy or self.oa_loading:
+            return
+        url = self.settings.get("oa_url") or gas.SOURCE_URL
+        self.oa_loading = True
+        self.oa_info.configure(text="Getting the latest sheet...")
+        self.oa_empty_hint.configure(text="Getting the latest APM Open Orders sheet from SharePoint...")
+        w = self.worker
+
+        def job():
+            w.ensure_browser()
+            self.log("Order Assignment: getting the APM Open Orders sheet from SharePoint...")
+            gas.fetch(w.driver, OA_FILE, url)
+            return gas.read(OA_FILE)
+
+        def done(orders):
+            self.oa_loading = False
+            self.settings["oa_fetched"] = time.time()
+            save_settings(self.settings)
+            self._oa_loaded(orders)
+
+        w.submit("Getting the APM Open Orders sheet", job, done, retry=True)
+        self.after(1000, self._oa_watch_failure)
+
+    def _oa_watch_failure(self):
+        if self.oa_loading and not self.busy:  # the job ended with an error (already shown)
+            self.oa_loading = False
+            self.oa_empty_hint.configure(text="The sheet could not be read - check the Orange network, then "
+                                              "click below.")
+            self._oa_render()
+        elif self.oa_loading:
+            self.after(1000, self._oa_watch_failure)
+
+    def _oa_read_file(self):
+        """Read the copy fetched earlier today (no network), in the background."""
+        self.oa_loading = True
+        self.oa_info.configure(text="Reading...")
+
+        def work():
+            try:
+                orders = gas.read(OA_FILE)
+            except Exception as e:
+                self.ui(lambda e=e: (setattr(self, "oa_loading", False), self.log(f"Order Assignment: {e}"),
+                                     self._oa_load(force=True)))
+                return
+            self.ui(lambda: (setattr(self, "oa_loading", False), self._oa_loaded(orders)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _oa_loaded(self, orders):
+        self.oa_orders = gas.classify(orders, self.dpm_names)
+        self.oa_time = self.settings.get("oa_fetched") or OA_FILE.stat().st_mtime
+        s = gas.summary(self.oa_orders)
+        self.log(f"Order Assignment: {s['total']} open orders - {s['assigned']} with DPMs, "
+                 f"{s['unassigned']} unassigned, {s['not_in_list']} with people not in the DPM list")
+        self._oa_render()
+
+    def _oa_reclassify(self):
+        """The DPM list changed: sort the orders again."""
+        if self.oa_orders:
+            gas.classify(self.oa_orders, self.dpm_names)
+            self._oa_render()
+
+    # --- filters and drawing
+    def _oa_filter(self, show=None, region=None, dpm=None):
+        if show is not None:
+            self.oa_show.set(show)
+        if region is not None:
+            self.oa_region.set(region)
+        if dpm is not None:
+            self.oa_dpm.set(dpm)
+        if self.oa_show.get() == gas.UNASSIGNED:
+            self.oa_region.set("All regions")
+            self.oa_dpm.set("")
+        self._oa_fill()
+
+    def _oa_regions(self):
+        found = {o["region"] for o in self.oa_orders if o["category"] == gas.ASSIGNED}
+        order = [r for r in gn.TEAMS if r in found] + sorted(found - set(gn.TEAMS))
+        return ["All regions"] + order
+
+    def _oa_people(self):
+        region, show = self.oa_region.get(), self.oa_show.get()
+        names = {o["dpm"] for o in self.oa_orders if o["dpm"]
+                 and (show == "all" or o["category"] == show)
+                 and (region == "All regions" or o["region"] == region)}
+        return sorted(names, key=str.lower)
+
+    def _oa_rows(self):
+        show, region = self.oa_show.get(), self.oa_region.get()
+        dpm, q = self.oa_dpm.get().strip(), self.oa_search.get().strip().lower()
+        out = []
+        for o in self.oa_orders:
+            if show != "all" and o["category"] != show:
+                continue
+            if region != "All regions" and o["region"] != region:
+                continue
+            if dpm and o["dpm"] != dpm and not gn.matches(o["dpm"], dpm):
+                continue
+            if q and q not in " ".join(str(v) for v in o.values() if v).lower():
+                continue
+            out.append(o)
+        key, rev = self.oa_sort
+        if key in ("target", "due_days"):
+            far = date.max if key == "target" else 10 ** 9
+            val = lambda o: (o.get(key) if o.get(key) is not None and o.get(key) != "" else far)
+        else:
+            val = lambda o: str(o.get(key) or "").lower()
+        try:
+            return sorted(out, key=val, reverse=rev)
+        except TypeError:
+            return sorted(out, key=lambda o: str(val(o)), reverse=rev)
+
+    def _oa_sort_by(self, col):
+        key, rev = self.oa_sort
+        self.oa_sort = (col, not rev if key == col else False)
+        self._oa_fill()
+
+    def _oa_render(self):
+        loaded = bool(self.oa_time)
+        if loaded:
+            self.oa_empty.place_forget()
+        else:
+            self.oa_empty.place(relx=0.5, rely=0.45, anchor="center")
+        s = gas.summary(self.oa_orders)
+        n = lambda v: str(v) if loaded else "-"
+        pct = lambda v: f"{v * 100 // max(s['total'], 1)}% of the orders" if loaded else ""
+        when = datetime.fromtimestamp(self.oa_time).strftime("%d-%b %H:%M") if loaded else ""
+        self.oa_cards["total"].set(n(s["total"]), f"sheet from {when}" if loaded else "not loaded yet")
+        self.oa_cards["assigned"].set(n(s["assigned"]), pct(s["assigned"]))
+        self.oa_cards["unassigned"].set(n(s["unassigned"]), pct(s["unassigned"]))
+        self.oa_cards["not_in_list"].set(n(s["not_in_list"]), f"{s['outsiders']} people" if loaded else "")
+        self.oa_cards["dpms"].set(n(s["dpms"]), f"of {len(self.dpm_names)} in the DPM list" if loaded else "")
+        self.oa_region_cb.configure(values=self._oa_regions())
+        self._oa_fill()
+
+    def _oa_fill(self):
+        rows = self._oa_rows()
+        t = self.oa_tree
+        t.delete(*t.get_children())
+        for i, o in enumerate(rows):
+            tags = [o["category"]] + (["odd"] if i % 2 else [])
+            dpm = o["dpm"] or "— unassigned —"
+            region = o["region"] or ("not in list" if o["category"] == gas.NOT_IN_LIST else "")
+            t.insert("", "end", iid=f"{o['order']}#{i}", tags=tags, values=(
+                o["order"], o.get("status") or "", o.get("customer") or "", dpm, region,
+                gas.fmt_date(o.get("target")), "" if o.get("due_days") is None else o["due_days"],
+                o.get("site_ref") or "", (o.get("country") or "").title()))
+        self.oa_dpm_cb.configure(values=self._oa_people())
+        parts = [p for p in (dict(self.OA_SHOWS).get(self.oa_show.get()) if self.oa_show.get() != "all" else "",
+                             self.oa_region.get() if self.oa_region.get() != "All regions" else "",
+                             self.oa_dpm.get().strip()) if p]
+        if parts:
+            self.oa_chip.set("  ·  ".join(parts) + "   ✕")
+            self.oa_chip.pack(side="left", padx=(12, 0))
+        else:
+            self.oa_chip.pack_forget()
+        self.oa_info.configure(text=f"{len(rows)} of {len(self.oa_orders)}" if self.oa_time else "")
+        self._oa_fill_people()
+
+    def _oa_fill_people(self):
+        region, show = self.oa_region.get(), self.oa_show.get()
+        orders = [o for o in self.oa_orders if (region == "All regions" or o["region"] == region)
+                  and (show == "all" or o["category"] == show)]
+        p = self.oa_people
+        p.delete(*p.get_children())
+        people = gas.per_person(orders)
+        for i, (name, where, count, _) in enumerate(people):
+            tags = ([gas.NOT_IN_LIST] if where == gas.NOT_IN_LIST else []) + (["odd"] if i % 2 else [])
+            p.insert("", "end", iid=name, values=(name, "not in list" if where == gas.NOT_IN_LIST else where, count),
+                     tags=tags)
+        un = sum(1 for o in orders if o["category"] == gas.UNASSIGNED)
+        self.oa_people_note.configure(
+            text=(f"{len(people)} people  ·  {un} orders without an STM\nOrange names are not in the DPM list - "
+                  "add them in DPM names if they are DPMs.") if self.oa_time else "")
+
+    def _oa_person_picked(self):
+        sel = self.oa_people.selection()
+        if sel and sel[0] != self.oa_dpm.get():
+            self.oa_dpm.set(sel[0])
+            self._oa_fill()
+
+    # --- actions
+    def _oa_selected_orders(self):
+        return list(dict.fromkeys(self.oa_tree.set(i, "order") for i in self.oa_tree.selection()))
+
+    def _oa_open(self, order=None):
+        orders = [order] if order else self._oa_selected_orders()
+        if orders:
+            self._my_open(orders[0])
+
+    def _oa_to_bulk(self):
+        """Put the selected orders in Bulk assignment, ready to give them a DPM."""
+        orders = self._oa_selected_orders()
+        if not orders:
+            return
+        g = self.assign_grid
+        empty = [i for i in g.rows() if not any(g.record(i).values())]
+        if len(empty) < len(orders):
+            g.add_rows(len(orders) - len(empty) + 5)
+            empty = [i for i in g.rows() if not any(g.record(i).values())]
+        for iid, order in zip(empty, orders):
+            g.set_value(iid, "order", order)
+        self.notebook.select(self.assign_grid.master.master.master)
+        self.log(f"{len(orders)} order(s) added to Bulk assignment - choose the DPM, then Run update.")
+
+    def _oa_menu(self, e):
+        iid = self.oa_tree.identify_row(e.y)
+        if not iid:
+            return
+        if iid not in self.oa_tree.selection():
+            self.oa_tree.selection_set(iid)
+        n = len(self.oa_tree.selection())
+        m = tk.Menu(self, tearoff=0)
+        m.add_command(label="Open in Order explorer", command=lambda: self._oa_open(self.oa_tree.set(iid, "order")))
+        m.add_command(label=f"Assign a DPM (Bulk assignment) - {n} order(s)", command=self._oa_to_bulk)
+        m.add_separator()
+        cell = self.oa_tree_copy._cell_at(e)
+        self.oa_tree_copy.add_items(m, *(cell or (iid, None)))
+        m.tk_popup(e.x_root, e.y_root)
+
+    def _oa_export(self):
+        rows = self._oa_rows()
+        if not rows:
+            return
+        path = Path(self._ctx()["workbook"]).parent / f"Order_assignment_{datetime.now():%Y-%m-%d_%H%M%S}.xlsx"
+        cols = [("Order", "order"), ("Status", "status"), ("Type", "type"), ("Customer", "customer"),
+                ("End customer", "end_customer"), ("STM (DPM)", "dpm"), ("Assignment", "category"),
+                ("Region", "region"), ("DPM team", "team"), ("Target date", "target"),
+                ("Initial target date", "ittd"), ("Revised target date", "rtdd"), ("Days to due", "due_days"),
+                ("Backlog", "backlog"), ("Order age", "age"), ("Cust. site ref", "site_ref"), ("Country", "country"),
+                ("Sales cluster", "cluster"), ("Service", "service"), ("Project", "project")]
+        try:
+            gx.write_sheet(path, "Order assignment",
+                           [f"APM open orders  ·  {len(rows)} shown  ·  sheet from "
+                            f"{datetime.fromtimestamp(self.oa_time):%d-%b-%Y %H:%M}"],
+                           [("Orders", [c for c, _ in cols],
+                             [[gas.fmt_date(o.get(k)) if isinstance(o.get(k), date) else
+                               ("" if o.get(k) is None else o.get(k)) for _, k in cols] for o in rows])])
+        except PermissionError:
+            messagebox.showerror(APP_NAME, f"{path.name} is open in Excel. Close it and try again.")
+            return
+        if messagebox.askyesno(APP_NAME, f"Saved {len(rows)} orders to\n{path}\n\nOpen it now?"):
+            os.startfile(path)
 
     def _tile_head(self, parent, title, icon):
         """A tile's title row (icon + bold title); returns the row so buttons can go on its right."""
@@ -2143,7 +2539,7 @@ class App(tk.Tk):
         return teams + [gn.NO_TEAM]
 
     def _dpm_choices(self):
-        """The names offered in Order assignment: those of the teams ticked there."""
+        """The names offered in Bulk assignment: those of the teams ticked there."""
         ticked = {t for t, v in getattr(self, "assign_team_vars", {}).items() if v.get()}
         return [gn.full_name(e) for e in self.dpm_names
                 if not hasattr(self, "assign_team_vars") or gn.team_of(e) in ticked]
@@ -2291,7 +2687,7 @@ class App(tk.Tk):
     # ----- DPM Names tab
     def _build_names_tab(self, f):
         top = self._tile(f, fill="x").body
-        ttk.Label(top, text="The DPMs (STMs) offered in Order assignment, with their names as they appear in "
+        ttk.Label(top, text="The DPMs (STMs) used by Order Assignment and Bulk assignment, with their names as they appear in "
                             "GOLD. Add, edit or remove names; the list is saved on this computer.",
                   style="Muted.TLabel", wraplength=900, justify="left").pack(anchor="w")
         tb = tk.Frame(top, background=CARD)
@@ -2343,6 +2739,8 @@ class App(tk.Tk):
         self._names_fill()
         if hasattr(self, "assign_team_vars"):
             self._assign_teams_changed(save=False)
+        if hasattr(self, "oa_orders"):
+            self._oa_reclassify()  # Order Assignment: a name added / given a team moves its orders
 
     def _names_team_buttons(self):
         """The Team filter: All, then each team in the list (DPM Egypt, DPM India, DPM Brazil, Other)."""
@@ -2456,7 +2854,7 @@ class App(tk.Tk):
             win.destroy()
 
         ttk.Label(body, text="GOLD user ID is optional - only needed when two GOLD users share the name "
-                             "(e.g. asmith2). Team: e.g. DPM Egypt (used to filter names in Order assignment).",
+                             "(e.g. asmith2). Team: e.g. DPM Egypt (used to filter names in Bulk assignment and Order Assignment).",
                   style="CardMuted.TLabel", wraplength=360).grid(row=5, column=0, columnspan=2, sticky="w",
                                                                  pady=(4, 0))
         btns = ttk.Frame(body, style="Card.TFrame")
@@ -3958,6 +4356,7 @@ if __name__ == "__main__":
         App._prewarm = lambda self: None
         App._check_updates = lambda self, quiet=True: None
         App._my_load = lambda self, refresh=False: None  # showing My Orders must not start GOLD here
+        App._oa_shown = lambda self: None  # nor Order Assignment fetch its sheet
         report = HERE / "ui_selftest_report.txt"
         try:
             app = App()
