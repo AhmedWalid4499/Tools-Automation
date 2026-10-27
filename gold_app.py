@@ -54,8 +54,7 @@ MY_SNAPSHOT = HERE / "my_orders_snapshot.json"  # last My orders read, to notice
 CHATS_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / APP_NAME / "chats"
 _OLD_CHATS_DIR = HERE / "chats"  # where chats were kept before 2.13.0
 # Org Chart departments whose people are DPMs (Settings > DPM departments can change the list)
-DEFAULT_DPM_DEPARTMENTS = ["APM Europe", "APM APAC", "APM AME", "CPM Egypt", "CPM India", "CPM Brazil",
-                           "Project Mgt Experts EUR", "Project Management APAC", "Project Mgt LAM"]
+DEFAULT_DPM_DEPARTMENTS = ["APM Europe", "APM APAC", "APM AME"]  # APMs only (no CPM / other departments)
 TRACKER_COMMENTS = HERE / "tracker_comments.json"  # Overview > Tracker: comments / next steps per order
 OA_FILE = HERE / "apm_open_orders.xlsx"  # the latest APM Open Orders sheet (replaced on every refresh)
 
@@ -2891,14 +2890,19 @@ class App(tk.Tk):
     def _assign_team_box(self, team, on=True):
         var = tk.BooleanVar(value=on)
         self.assign_team_vars[team] = var
-        ttk.Checkbutton(self.assign_teams_row, text=team, variable=var, style="Card.TCheckbutton",
-                        command=self._assign_teams_changed).pack(side="left", padx=(0, 10))
+        box = ttk.Checkbutton(self.assign_teams_row, text=team, variable=var, style="Card.TCheckbutton",
+                              command=self._assign_teams_changed)
+        box.pack(side="left", padx=(0, 10))
+        var.box = box
 
     def _assign_teams_changed(self, save=True):
         """The DPM team tick-boxes changed: offer only those names (and remember the choice)."""
-        for team in self._dpm_teams():  # a team that appeared since (e.g. after an Org Chart import)
+        teams = self._dpm_teams()
+        for team in teams:  # a team that appeared since (e.g. after an Org Chart import)
             if team not in self.assign_team_vars:
                 self._assign_team_box(team)
+        for team in [t for t in self.assign_team_vars if t not in teams]:  # a department taken off the list
+            self.assign_team_vars.pop(team).box.destroy()
         names = self._dpm_choices()
         self.assign_default_cb.configure(values=[""] + names)
         ticked = [t for t, v in self.assign_team_vars.items() if v.get()]
@@ -3100,6 +3104,15 @@ class App(tk.Tk):
         def done(res):
             people, missing = res
             before = len(self.dpm_names)
+            # Departments taken off the list (e.g. the CPM ones 2.14.0 added): drop the people they brought in
+            # (Org Chart people: they have an email); names typed by hand are kept.
+            dropped_teams = ({gn.team_for(d) for d in self.settings.get("dpm_synced_departments") or []}
+                             - {gn.team_for(d) for d in wanted})
+            removed = [e for e in self.dpm_names if e.get("team") in dropped_teams and e.get("email")]
+            if removed:
+                self.dpm_names[:] = [e for e in self.dpm_names if e not in removed]
+                self.settings["assign_teams"] = [t for t in self.settings.get("assign_teams") or []
+                                                 if t not in dropped_teams] or None
             added, updated = gn.merge_team(self.dpm_names, people)
             self.settings.update(dpm_synced=time.time(), dpm_synced_departments=wanted)
             save_settings(self.settings)
@@ -3107,6 +3120,7 @@ class App(tk.Tk):
             teams = Counter(p["team"] for p in people)
             counts = ", ".join(f"{t}: {n}" for t, n in teams.most_common())
             self.log(f"DPM teams from the Org Chart ({counts}): {added} added, {updated} updated"
+                     + (f", {len(removed)} removed ({', '.join(sorted(dropped_teams))})" if removed else "")
                      + (f" - not found: {', '.join(missing)}" if missing else ""))
             if quiet:
                 return
