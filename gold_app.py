@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 
@@ -52,6 +53,9 @@ MY_SNAPSHOT = HERE / "my_orders_snapshot.json"  # last My orders read, to notice
 # syncs (not Documents, which is often in OneDrive). Saving is off unless the user ticks "Save chats".
 CHATS_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / APP_NAME / "chats"
 _OLD_CHATS_DIR = HERE / "chats"  # where chats were kept before 2.13.0
+# Org Chart departments whose people are DPMs (Settings > DPM departments can change the list)
+DEFAULT_DPM_DEPARTMENTS = ["APM Europe", "APM APAC", "APM AME", "CPM Egypt", "CPM India", "CPM Brazil",
+                           "Project Mgt Experts EUR", "Project Management APAC", "Project Mgt LAM"]
 TRACKER_COMMENTS = HERE / "tracker_comments.json"  # Overview > Tracker: comments / next steps per order
 OA_FILE = HERE / "apm_open_orders.xlsx"  # the latest APM Open Orders sheet (replaced on every refresh)
 
@@ -1004,6 +1008,8 @@ class App(tk.Tk):
     def _page_changed(self, title, subtitle):
         self.page_title.configure(text=title)
         self.page_sub.configure(text=subtitle)
+        if title in ("DPM names", "Bulk assignment", "Order Assignment") and hasattr(self, "names_tree"):
+            self.after(300, self._dpm_auto_sync)  # every department's DPMs, for every user
         if title == "Order Assignment" and hasattr(self, "oa_tree"):
             self.after(50, self._oa_shown)
 
@@ -1198,6 +1204,7 @@ class App(tk.Tk):
             if self.ai_key_file.get() != old_key:
                 self.chat = None  # the next question uses the new key file
             save_oa_link()
+            save_departments()
             self._store_settings()
             if self.show_browser.get() != was_shown and self.worker.driver is not None:
                 self.worker.restart = True
@@ -1224,8 +1231,25 @@ class App(tk.Tk):
                 if self.notebook.current() is self.oa_frame:
                     self.after(200, lambda: self._oa_load(force=True))
 
+        ttk.Label(body, text="DPM departments", style="Card.TLabel").grid(row=25, column=0, sticky="w", pady=4)
+        depts = tk.StringVar(value="; ".join(self._dpm_departments()))
+        ttk.Entry(body, textvariable=depts, width=62).grid(row=25, column=1, columnspan=2, sticky="ew", padx=8)
+        ttk.Button(body, text="Default", command=lambda: depts.set("; ".join(DEFAULT_DPM_DEPARTMENTS))).grid(
+            row=25, column=3)
+        ttk.Label(body, text="Org Chart departments whose people are DPMs (separated by ;). Everyone's DPM list "
+                             "is filled from them automatically - used by Bulk assignment and Order Assignment.",
+                  style="CardMuted.TLabel", font=(FONT, 8), wraplength=520, justify="left").grid(
+            row=26, column=1, columnspan=3, sticky="w", padx=8)
+
+        def save_departments():
+            new = [d.strip() for d in re.split(r"[;\n]", depts.get()) if d.strip()]
+            if new and new != self._dpm_departments():
+                self.settings["dpm_departments"] = new
+                self.log("DPM departments changed - the DPM list is updated from the Org Chart.")
+                self.after(300, lambda: self._names_import_oc(quiet=True))
+
         btns = ttk.Frame(body, style="Card.TFrame")
-        btns.grid(row=25, column=0, columnspan=4, sticky="ew", pady=(18, 0))
+        btns.grid(row=27, column=0, columnspan=4, sticky="ew", pady=(18, 0))
         ttk.Label(btns, text=f"{APP_NAME} {__version__}  ·  \u00a9 2026 {AUTHOR}  ·  data folder: {HERE}",
                   style="CardMuted.TLabel", font=(FONT, 8)).pack(side="left")
         ttk.Button(btns, text="Done", style="Accent.TButton", command=close).pack(side="right")
@@ -3043,37 +3067,74 @@ class App(tk.Tk):
             if self.dpm_names else "No names yet - click “Import DPM teams from Org Chart” to add the DPM teams "
                                    "(Egypt, India, Brazil), or add names one by one.")
 
-    def _names_import_oc(self):
-        """Org Chart > Search by Organization > Department 'APM': APM Europe -> DPM Egypt, APM APAC -> DPM India,
-        APM AME -> DPM Brazil. Adds the people (or sets the team of names already in the list). Read-only."""
+    DPM_SYNC_DAYS = 7  # the DPM list is refreshed from the Org Chart at most this often (automatically)
+
+    def _dpm_departments(self):
+        """The Org Chart departments whose people are DPMs (Settings > DPM departments)."""
+        saved = self.settings.get("dpm_departments")
+        return [d.strip() for d in (saved if isinstance(saved, list) else DEFAULT_DPM_DEPARTMENTS) if d.strip()]
+
+    def _names_import_oc(self, quiet=False):
+        """Read the DPM departments' people from the Org Chart (Search by Organization > Department) and add
+        them to the list - or set the team of names already in it. Read-only. quiet: the automatic weekly
+        sync (no message, nothing if the app is busy)."""
         if self.busy:
             return
+        wanted = self._dpm_departments()
 
         def job():
             def read(oc):
-                depts = [x for x in oc.departments("APM") if x["name"] in gn.TEAMS]
+                by_name = {x["name"].lower(): x for x in oc.departments("")}
+                depts = [by_name[d.lower()] for d in wanted if d.lower() in by_name]
+                missing = [d for d in wanted if d.lower() not in by_name]
                 if not depts:
-                    raise RuntimeError("No APM departments found in the Org Chart.")
+                    raise RuntimeError("None of the DPM departments were found in the Org Chart "
+                                       "(Settings > DPM departments).")
                 out = []
                 for x in depts:
                     self.log(f"Org Chart: reading {x['name']}...")
-                    out += [gn.from_org_chart(r, gn.TEAMS[x["name"]]) for r in oc.department_people([x["id"]])]
-                return out
+                    out += [gn.from_org_chart(r, gn.team_for(x["name"])) for r in oc.department_people([x["id"]])]
+                return out, missing
             return self._org(read)
 
-        def done(people):
+        def done(res):
+            people, missing = res
             before = len(self.dpm_names)
             added, updated = gn.merge_team(self.dpm_names, people)
+            self.settings.update(dpm_synced=time.time(), dpm_synced_departments=wanted)
+            save_settings(self.settings)
             self._names_saved()
-            counts = ", ".join(f"{t}: {sum(p['team'] == t for p in people)}" for t in gn.TEAMS.values())
-            self.log(f"DPM teams from the Org Chart ({counts}): {added} added, {updated} updated")
+            teams = Counter(p["team"] for p in people)
+            counts = ", ".join(f"{t}: {n}" for t, n in teams.most_common())
+            self.log(f"DPM teams from the Org Chart ({counts}): {added} added, {updated} updated"
+                     + (f" - not found: {', '.join(missing)}" if missing else ""))
+            if quiet:
+                return
             self._message(APP_NAME, "DPM teams imported",
-                          f"{len(people)} people in the Org Chart ({counts}).\n\n{added} added to the list, "
+                          f"{len(people)} people in {len(teams)} departments ({counts}).\n\n{added} added to the list, "
                           f"{updated} names already there now have their team ({before} names before, "
-                          f"{len(self.dpm_names)} now).\n\nTip: 'Check names in GOLD' makes sure the new "
-                          "names are spelled as in GOLD.")
+                          f"{len(self.dpm_names)} now)."
+                          + (f"\n\nNot found in the Org Chart: {', '.join(missing)}" if missing else "")
+                          + "\n\nTip: 'Check names in GOLD' makes sure the new names are spelled as in GOLD.")
 
-        self.worker.submit("Reading DPM teams from the Org Chart", job, done, retry=True)
+        self.worker.submit("Reading the DPM teams from the Org Chart", job, done, retry=True)
+
+    def _dpm_sync_due(self):
+        """Every user's list holds every department's DPMs: sync when it never was, when the departments
+        changed, or when the last sync is DPM_SYNC_DAYS old."""
+        s = self.settings
+        return (not s.get("dpm_synced") or s.get("dpm_synced_departments") != self._dpm_departments()
+                or time.time() - s["dpm_synced"] > self.DPM_SYNC_DAYS * 86400)
+
+    def _dpm_auto_sync(self, tries=0):
+        if not self._dpm_sync_due():
+            return
+        if self.busy:  # e.g. Order Assignment is reading its sheet: right after it
+            if tries < 60:
+                self.after(2000, lambda: self._dpm_auto_sync(tries + 1))
+            return
+        self.log("Updating the DPM list from the Org Chart (all DPM departments)...")
+        self._names_import_oc(quiet=True)
 
     def _names_dialog(self, title, entry=None):
         """Small form for one name. Returns {'first','last'} or None."""
@@ -4624,6 +4685,7 @@ if __name__ == "__main__":
         App._check_updates = lambda self, quiet=True: None
         App._my_load = lambda self, refresh=False: None  # showing My Orders must not start GOLD here
         App._oa_shown = lambda self: None  # nor Order Assignment fetch its sheet
+        App._dpm_auto_sync = lambda self, tries=0: None  # nor the DPM list read the Org Chart
         report = HERE / "ui_selftest_report.txt"
         try:
             app = App()

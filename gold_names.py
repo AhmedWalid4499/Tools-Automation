@@ -59,9 +59,14 @@ def lookup(names, text):
     return next((e for e in names if full_name(e).lower() == key), None)
 
 
-# ---------- DPM teams (from the Org Chart: Search by Organization > Department "APM ...")
+# ---------- DPM teams (from the Org Chart: Search by Organization > Department)
+# Short team names for the main APM departments; any other department's team is the department's own name.
 TEAMS = {"APM Europe": "DPM Egypt", "APM APAC": "DPM India", "APM AME": "DPM Brazil"}
 NO_TEAM = "Other"
+
+
+def team_for(department):
+    return TEAMS.get(department, department)
 
 
 def team_of(entry):

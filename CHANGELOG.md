@@ -1,5 +1,15 @@
 # GOLD Express - what's new
 
+## 2.14.0
+- **The APMs of every department, for everyone**: Bulk assignment and Order Assignment now offer the
+  DPMs of nine Org Chart departments - APM Europe, APM APAC, APM AME, CPM Egypt, CPM India, CPM Brazil,
+  Project Mgt Experts EUR, Project Management APAC and Project Mgt LAM (about 430 people) - each with
+  its own team tick-box / region.
+- **Your DPM list fills itself**: it is updated from the Org Chart automatically (when you open DPM
+  names, Bulk assignment or Order Assignment, at most once a week) - nothing to import by hand.
+  Names you added yourself are kept.
+- Settings > DPM departments: the list of departments (add or remove one there).
+
 ## 2.13.0
 Privacy of the GOLD bot:
 - **Nothing kept on the AI's side by GOLD Express**: no prompt caching (which stored the conversation
