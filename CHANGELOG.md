@@ -1,5 +1,13 @@
 # GOLD Express - what's new
 
+## 2.15.0
+- **A new futuristic look** (now the default): deep-space background, glass tiles with glowing
+  edges, neon wave cards, and glowing violet-to-blue buttons and menu. Prefer the old look?
+  Settings > Appearance > Light or Dark (or the button at the bottom of the side menu).
+- **The GOLD bot looks like an AI**: a flowing aurora header with an "AI" badge, a glowing bot,
+  your questions in gradient bubbles, animated "thinking" dots, AI suggestion cards and a glowing
+  message box - in every look.
+
 ## 2.14.2
 - Clearer update messages: when updates can't be checked, GOLD Express says so in plain words and
   points to the GOLD Express download page.

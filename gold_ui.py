@@ -23,9 +23,11 @@ def _initial_theme():
         return os.environ["GOLD_THEME"]
     try:
         from open_gold import HERE
-        return json.loads((HERE / "gold_app_settings.json").read_text(encoding="utf-8")).get("theme", "light")
+        s = json.loads((HERE / "gold_app_settings.json").read_text(encoding="utf-8"))
     except Exception:
-        return "light"
+        return "neo"
+    # 2.15.0: the Futuristic look is the new default - once for everyone (Settings > Appearance switches back)
+    return s.get("theme", "neo") if s.get("theme_v3") else "neo"
 
 
 THEMES = {
@@ -51,10 +53,29 @@ THEMES = {
         GREEN_FG="#7FD99A", GREEN_BG="#1C3324", AMBER_FG="#F2B861", AMBER_BG="#3A2E16",
         RED_FG="#FF8A8A", RED_BG="#3D1E21", GREY_FG="#A0A5AD", GREY_BG="#2A2B2F",
     ),
+    # Futuristic: deep-space indigo, glass tiles with glowing edges, electric violet -> blue accent
+    "neo": dict(
+        BG="#0C0E22", CARD="#161937", INK="#EEF0FF", MUTED="#A3A8D6", FAINT="#6F75AD", LINE="#272B57",
+        ORANGE="#7C6CFF", ORANGE_DARK="#B3A9FF", ORANGE_SOFT="#25225A", HOVER="#1E2250",
+        FIELD="#10122C", FIELD_LINE="#2C3170", PLACEHOLDER="#6D73A8", ACCENT_OFF="#3D3878",
+        SUB_INK="#C7CBF0", TRACK="#232755", ZEBRA="#191C3F", HEAD_BG="#1B1E44", HEAD_ACTIVE="#24285A",
+        BTN_LINE="#2E3370", BTN_HOVER="#211F52", BTN_HOVER_LINE="#7C6CFF", BTN_PRESS="#2A2766",
+        DISABLED="#151834", DISABLED_LINE="#232750", DISABLED_INK="#575D93", CHECK_LINE="#3B4185",
+        THUMB="#2C3168", THUMB_HOVER="#3A4086", THUMB_PRESS="#4A51A0",
+        GREEN_FG="#4ADE9B", GREEN_BG="#123527", AMBER_FG="#FBC562", AMBER_BG="#3A2F14",
+        RED_FG="#FF7A90", RED_BG="#3A1630", GREY_FG="#A3A8D6", GREY_BG="#20234A",
+    ),
 }
-THEME = _initial_theme() if _initial_theme() in THEMES else "light"
+# Every theme: the accent gradient (buttons, side menu in Futuristic) and the GOLD bot's "AI" colours
+for _t, _extra in {"light": dict(ACCENT2="#FF9A3D", AI_A="#7C5CFF", AI_B="#1FB6E8", AI_SOFT="#F1EEFF"),
+                   "dark": dict(ACCENT2="#FF9A3D", AI_A="#8B6CFF", AI_B="#22C3EE", AI_SOFT="#231F3D"),
+                   "neo": dict(ACCENT2="#3FA2FF", AI_A="#9D6BFF", AI_B="#22D3EE", AI_SOFT="#221E55")}.items():
+    THEMES[_t].update(_extra)
+THEME_NAMES = {"neo": "Futuristic", "dark": "Dark", "light": "Light"}
+THEME = _initial_theme() if _initial_theme() in THEMES else "neo"
 globals().update(THEMES[THEME])
-DARK = THEME == "dark"
+DARK = THEME in ("dark", "neo")
+NEO = THEME == "neo"
 
 # Gradient card palettes: (top-left colour, bottom-right colour, glow colour, accent / text colour)
 PALETTES = {
@@ -84,8 +105,25 @@ PALETTES.update({
     "v_purple": ("#BE6EDC", "#8A3FB8", "#DDA8F2", "#FFFFFF"),
     "v_teal":   ("#33C7B3", "#128577", "#86E6D8", "#FFFFFF"),
     "v_rose":   ("#FF7E8A", "#DD3F58", "#FFB8BF", "#FFFFFF"),
+} if not NEO else {
+    # Futuristic: dark glass cards with a glowing neon wave (light colour, neon colour, glow, caption colour)
+    "v_blue":   ("#7DD3FC", "#3B9BFF", "#3B9BFF", "#7DD3FC"),
+    "v_green":  ("#86EFAC", "#2DD4A0", "#2DD4A0", "#86EFAC"),
+    "v_orange": ("#FFC48A", "#FF8A3D", "#FF8A3D", "#FFC48A"),
+    "v_purple": ("#D2B8FF", "#9D6BFF", "#9D6BFF", "#D2B8FF"),
+    "v_teal":   ("#7FF0E0", "#22D3C5", "#22D3C5", "#7FF0E0"),
+    "v_rose":   ("#FFA3B5", "#FF5C7C", "#FF5C7C", "#FFA3B5"),
+    # the plain palettes become neon cards too (Overview cards, RAG status)
+    "sun":      ("#FFD48A", "#FFB020", "#FFB020", "#FFD48A"),
+    "peach":    ("#FFC48A", "#FF8A3D", "#FF8A3D", "#FFC48A"),
+    "mint":     ("#86EFAC", "#2DD4A0", "#2DD4A0", "#86EFAC"),
+    "amber":    ("#FFE08A", "#FBBF24", "#FBBF24", "#FFE08A"),
+    "rose":     ("#FFA3B5", "#FF5C7C", "#FF5C7C", "#FFA3B5"),
+    "lavender": ("#D2B8FF", "#9D6BFF", "#9D6BFF", "#D2B8FF"),
+    "sky":      ("#7DD3FC", "#3B9BFF", "#3B9BFF", "#7DD3FC"),
+    "grey":     ("#C7CBF0", "#6F75AD", "#6F75AD", "#C7CBF0"),
 })
-VIVID = {k for k in PALETTES if k.startswith("v_")}
+VIVID = set(PALETTES) if NEO else {k for k in PALETTES if k.startswith("v_")}
 RAG_PALETTE = {"Green": "mint", "Amber": "amber", "Red": "rose", "No date": "grey", None: "grey"}
 
 
@@ -103,8 +141,61 @@ def rounded_image(w, h, r, fill, outline=None, scale=3, width=1):
     return img.resize((max(w, 2), max(h, 2)), Image.LANCZOS)
 
 
+def mix(a, b, t):
+    """Colour between a and b (0..1) as #rrggbb."""
+    a, b = _hex(a), _hex(b)
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def gradient(w, h, c0, c1, horizontal=True):
+    """A plain RGBA gradient from c0 to c1 (left -> right, or top -> bottom)."""
+    n = max(w if horizontal else h, 2)
+    line = Image.new("RGBA", (n, 1))
+    a, b = _hex(c0), _hex(c1)
+    for i in range(n):
+        t = i / (n - 1)
+        line.putpixel((i, 0), tuple(round(x + (y - x) * t) for x, y in zip(a, b)) + (255,))
+    if horizontal:
+        return line.resize((max(w, 2), max(h, 2)))
+    return line.rotate(-90, expand=True).resize((max(w, 2), max(h, 2)))
+
+
+def gradient_rounded(w, h, r, c0, c1, horizontal=True):
+    """A rounded shape filled with a gradient (pills, bubbles, active menu items)."""
+    mask = rounded_image(w, h, r, (255, 255, 255, 255)).split()[-1]
+    out = Image.new("RGBA", (max(w, 2), max(h, 2)), (0, 0, 0, 0))
+    out.paste(gradient(w, h, c0, c1, horizontal), (0, 0), mask)
+    return out
+
+
+def gradient_ring(w, h, r, c0, c1, width=2, fill=None):
+    """A rounded outline drawn with a gradient (glowing AI borders), optionally filled inside."""
+    s = 3
+    outer = rounded_image(w, h, r, (255, 255, 255, 255)).split()[-1]
+    inner = Image.new("L", (w, h), 0)
+    inner.paste(rounded_image(w - 2 * width, h - 2 * width, max(r - width, 1), (255, 255, 255, 255)).split()[-1],
+                (width, width))
+    ring = Image.composite(Image.new("L", (w, h), 0), outer, inner)
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    if fill:
+        out.paste(Image.new("RGBA", (w, h), fill), (0, 0), inner)
+    out.paste(gradient(w, h, c0, c1), (0, 0), ring)
+    return out
+
+
 def tile_image(w, h, r, fill=CARD, shadow=True, outline=None, m=6):
     """A rounded tile with a soft shadow underneath, inset by m pixels so the shadow fits."""
+    if NEO and fill == CARD and outline is None:
+        return glass_tile_image(w, h, r, m)
+    if isinstance(outline, tuple):  # (c0, c1[, width]): a gradient edge with a soft glow (the AI composer)
+        c0, c1, width = (outline + (2,))[:3]
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        if width >= 2:
+            glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            ImageDraw.Draw(glow).rounded_rectangle((m, m, w - m, h - m), radius=r, fill=_hex(c0) + (70,))
+            img = Image.alpha_composite(img, glow.filter(ImageFilter.GaussianBlur(5)))
+        img.alpha_composite(gradient_ring(w - 2 * m, h - 2 * m, r, c0, c1, width=width, fill=fill), (m, m))
+        return img
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     if shadow:
         sh = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -115,8 +206,52 @@ def tile_image(w, h, r, fill=CARD, shadow=True, outline=None, m=6):
     return img
 
 
+def glass_tile_image(w, h, r, m=6):
+    """Futuristic tile: dark glass (a touch lighter at the top), a thin luminous edge and a violet glow."""
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).rounded_rectangle((m, m + 2, w - m, h - m + 2), radius=r, fill=(70, 55, 190, 70))
+    img = Image.alpha_composite(img, glow.filter(ImageFilter.GaussianBlur(6)))
+    iw, ih = w - 2 * m, h - 2 * m
+    body = rounded_image(iw, ih, r, CARD)  # flat inside: the tile's widgets sit on the same colour
+    edge = gradient_ring(iw, ih, r, "#6A62E0", "#2A2F66", width=1)
+    body.alpha_composite(edge)
+    img.alpha_composite(body, (m, m))
+    return img
+
+
+def neon_card_image(w, h, r, palette):
+    """Futuristic stat card: dark glass tinted with the palette colour, a glowing neon wave across the
+    top half (like a sparkline) with a soft fill under it, and a thin coloured edge."""
+    import math
+    light, neon, glow, _ = PALETTES[palette]
+    base = gradient_rounded(w, h, r, mix(CARD, neon, 0.16), mix(CARD, BG, 0.25), horizontal=False)
+    s = 3
+    W, H = w * s, h * s
+    def y(x):  # rises from the bottom-left (under the text) to the right, with a gentle wiggle
+        t = min(max(x / w, 0), 1)
+        return h * (0.95 - 0.5 * t * t * (3 - 2 * t) + 0.05 * math.sin(t * 2 * math.pi * 1.6))
+    pts = [(x * s, y(x) * s) for x in range(-4, w + 8, 3)]
+    area = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(area).polygon(pts + [(W + 8 * s, H), (-4 * s, H)], fill=_hex(neon) + (38,))
+    fade = gradient(W, H, "#ffffff", "#000000", horizontal=False).convert("L")
+    area.putalpha(Image.composite(area.split()[-1], Image.new("L", (W, H), 0), fade))
+    line = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(line).line(pts, fill=_hex(neon) + (255,), width=int(2.2 * s), joint="curve")
+    halo = line.filter(ImageFilter.GaussianBlur(4 * s))
+    fx = Image.alpha_composite(Image.alpha_composite(area, halo), line).resize((w, h), Image.LANCZOS)
+    mask = rounded_image(w, h, r, (255, 255, 255, 255)).split()[-1]
+    clipped = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    clipped.paste(fx, (0, 0), mask)
+    base.alpha_composite(clipped)
+    base.alpha_composite(gradient_ring(w, h, r, mix(neon, "#ffffff", 0.2), mix(neon, CARD, 0.75), width=1))
+    return base
+
+
 def gradient_card_image(w, h, r, palette):
     """Rounded card with a soft diagonal gradient and a warm glow in the lower right."""
+    if NEO and palette in VIVID:
+        return neon_card_image(w, h, r, palette)
     c0, c1, glow, _ = (_hex(x) for x in PALETTES[palette])
     sw, sh = max(w // 3, 2), max(h // 3, 2)
     base = Image.new("RGB", (sw, sh))
@@ -469,11 +604,11 @@ class Bot(tk.Canvas):
 
     _cache = {}
 
-    def __init__(self, parent, image_path, size=120, bg=CARD, mode="idle", clickable=True):
+    def __init__(self, parent, image_path, size=120, bg=CARD, mode="idle", clickable=True, halo=False):
         w, h = int(size * 1.0), int(size * 1.22)
         super().__init__(parent, width=w, height=h, background=bg, highlightthickness=0, borderwidth=0)
         self.size, self.mode, self._job, self._i = size, mode, None, 0
-        self.frames = {m: self._frames(image_path, size, m, bg) for m in ("idle", "busy", "hop")}
+        self.frames = {m: self._frames(image_path, size, m, bg, halo) for m in ("idle", "busy", "hop")}
         self._item = self.create_image(w // 2, 0, anchor="n")
         if clickable:
             self.configure(cursor="hand2")
@@ -481,9 +616,9 @@ class Bot(tk.Canvas):
         self.start(mode)
 
     @classmethod
-    def _frames(cls, path, size, mode, bg):
+    def _frames(cls, path, size, mode, bg, halo=False):
         import math
-        key = (str(path), size, mode, bg)
+        key = (str(path), size, mode, bg, halo)
         if key in cls._cache:
             return cls._cache[key]
         bot = Image.open(path).convert("RGBA")
@@ -500,6 +635,15 @@ class Bot(tk.Canvas):
                 lift = (math.sin(2 * math.pi * t) + 1) / 2 * (0.06 if mode == "idle" else 0.09)
                 angle = math.sin(4 * math.pi * t) * 4 if mode == "busy" else 0
             im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            if halo:  # an AI glow behind the bot, breathing slowly
+                pulse = (math.sin(2 * math.pi * t) + 1) / 2
+                g = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                gd = ImageDraw.Draw(g)
+                cx, cy, rr = w / 2, h * 0.43, size * (0.27 + 0.03 * pulse)  # fades out well inside the frame
+                gd.ellipse((cx - rr, cy - rr, cx + rr, cy + rr), fill=_hex(AI_A) + (int(120 + 60 * pulse),))
+                gd.ellipse((cx - rr * 0.55, cy - rr * 0.9, cx + rr * 1.05, cy + rr * 0.5),
+                           fill=_hex(AI_B) + (int(90 + 50 * pulse),))
+                im.alpha_composite(g.filter(ImageFilter.GaussianBlur(size * 0.08)))
             # shadow: smaller and lighter when the bot is higher
             sw = w * (0.62 - lift * 1.4)
             sy = h - h * 0.07
@@ -541,6 +685,155 @@ class Bot(tk.Canvas):
         self._job = self.after(delay, self._tick)
 
 
+class AIBanner(tk.Canvas, _Redraw):
+    """The GOLD bot's header: a rounded, slowly flowing aurora gradient (AI colours) with the bot, its name,
+    an "AI" badge, a hint, an optional chip (the order in view) and a "New chat" button drawn on it."""
+
+    def __init__(self, parent, bot_path=None, title="", hint="", on_new=None, bg=CARD, height=64):
+        super().__init__(parent, height=height, background=bg, highlightthickness=0, borderwidth=0)
+        self.title, self.hint, self.chip, self.on_new = title, hint, "", on_new
+        self.f_title = tkfont.Font(family="Segoe UI Semibold", size=12)
+        self.f_hint = tkfont.Font(family=FONT, size=9)
+        self.f_badge = tkfont.Font(family=FONT, size=8, weight="bold")
+        self._bot = None
+        if bot_path:
+            b = Image.open(bot_path).convert("RGBA")
+            b.thumbnail((height - 18, height - 18), Image.LANCZOS)
+            self._bot = ImageTk.PhotoImage(b)
+        self._frames, self._i, self._job, self._imgs = [], 0, None, []
+        self._watch()
+        self.bind("<Button-1>", self._clicked)
+        self.bind("<Motion>", self._motion)
+        self._new_box = None
+
+    def set_chip(self, text):
+        self.chip = text or ""
+        if self._size:
+            self._draw_fg()
+
+    def redraw(self, w, h):
+        # a strip twice as wide, looping: AI_A -> AI_B -> pink -> AI_A; frames slide along it
+        cols = [AI_A, AI_B, "#E879F9", AI_A]
+        n = 3
+        wide = Image.new("RGBA", (w * 2, h))
+        seg = (w * 2) // n
+        for k in range(n):
+            wide.paste(gradient(seg + 1, h, cols[k], cols[k + 1]), (k * seg, 0))
+        blobs = Image.new("RGBA", (w * 2, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(blobs)
+        for cx, cy, rr, a in ((0.15, 0.2, 0.35, 70), (0.55, 0.9, 0.4, 60), (0.85, 0.1, 0.3, 70)):
+            d.ellipse(((cx * 2 * w) - rr * h * 3, cy * h - rr * h * 3, (cx * 2 * w) + rr * h * 3, cy * h + rr * h * 3),
+                      fill=(255, 255, 255, a))
+        wide = Image.alpha_composite(wide, blobs.filter(ImageFilter.GaussianBlur(h * 0.6)))
+        mask = rounded_image(w, h, 16, (255, 255, 255, 255)).split()[-1]
+        self._frames = []
+        steps = 48
+        for i in range(steps):
+            x = int(i / steps * w)
+            frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            frame.paste(wide.crop((x, 0, x + w, h)), (0, 0), mask)
+            self._frames.append(ImageTk.PhotoImage(frame))
+        self.delete("all")
+        self._bg = self.create_image(0, 0, anchor="nw", image=self._frames[0])
+        self._draw_fg()
+        if self._job is None:
+            self._tick()
+
+    def _draw_fg(self):
+        self.delete("fg")
+        w, h = self._size
+        x = 14
+        if self._bot:
+            self.create_image(x, h // 2, image=self._bot, anchor="w", tags="fg")
+            x += self._bot.width() + 10
+        ty = h // 2 - self.f_title.metrics("linespace") // 2 - 1  # title above the middle, hint below it
+        self.create_text(x, ty, text=self.title, anchor="w", fill="white", font=self.f_title, tags="fg")
+        tw = self.f_title.measure(self.title)
+        bw = self.f_badge.measure("✦ AI") + 14
+        bx = x + tw + 10
+        badge = ImageTk.PhotoImage(rounded_image(bw, 18, 9, (255, 255, 255, 60)))
+        self._imgs = [badge]
+        self.create_image(bx, ty, image=badge, anchor="w", tags="fg")
+        self.create_text(bx + bw // 2, ty, text="✦ AI", fill="white", font=self.f_badge, tags="fg")
+        # right side: New chat button, then the chip
+        right = w - 14
+        if self.on_new:
+            label = "＋  New chat"
+            nw = self.f_hint.measure(label) + 26
+            img = ImageTk.PhotoImage(rounded_image(nw, 28, 14, (255, 255, 255, 235)))
+            self._imgs.append(img)
+            self.create_image(right, h // 2, image=img, anchor="e", tags=("fg", "new"))
+            self.create_text(right - nw // 2, h // 2, text=label, fill=AI_A, font=(FONT, 9, "bold"), tags=("fg", "new"))
+            self._new_box = (right - nw, h // 2 - 14, right, h // 2 + 14)
+            right -= nw + 10
+        hy = h // 2 + self.f_hint.metrics("linespace") // 2 + 3  # the hint line, under the title
+        if self.chip:  # the order in view: a chip at the end of the hint line (clear of the title and badge)
+            cw = self.f_hint.measure(self.chip) + 22
+            ch = self.f_hint.metrics("linespace") + 4
+            img = ImageTk.PhotoImage(rounded_image(cw, ch, ch // 2, (255, 255, 255, 55)))
+            self._imgs.append(img)
+            self.create_image(right, hy, image=img, anchor="e", tags="fg")
+            self.create_text(right - cw // 2, hy, text=self.chip, fill="white", font=(FONT, 9, "bold"), tags="fg")
+            right -= cw + 10
+        hint = fit_text(self.hint, self.f_hint, max(right - x, 40), 1)
+        self.create_text(x, hy, text=hint, anchor="w", fill="#F2F0FF", font=self.f_hint, tags="fg")
+
+    def _in_new(self, e):
+        b = self._new_box
+        return b and b[0] <= e.x <= b[2] and b[1] <= e.y <= b[3]
+
+    def _clicked(self, e):
+        if self.on_new and self._in_new(e):
+            self.on_new()
+
+    def _motion(self, e):
+        self.configure(cursor="hand2" if self._in_new(e) else "")
+
+    def _tick(self):
+        if not self.winfo_exists() or not self._frames:
+            self._job = None
+            return
+        if not self.winfo_ismapped():  # another page is showing: just look again in a moment (no CPU)
+            self._job = self.after(600, self._tick)
+            return
+        self._i = (self._i + 1) % len(self._frames)
+        self.itemconfigure(self._bg, image=self._frames[self._i])
+        self._job = self.after(90, self._tick)
+
+
+class AIThinking(tk.Canvas):
+    """'Working' row of the GOLD bot: three glowing dots pulsing in the AI colours, then the text."""
+
+    def __init__(self, parent, bg=CARD, text="Thinking..."):
+        self.font = tkfont.Font(family=FONT, size=9, slant="italic")
+        h = self.font.metrics("linespace") + 10
+        super().__init__(parent, height=h, width=420, background=bg, highlightthickness=0, borderwidth=0)
+        self.base, self._i, self._dots = text, 0, []
+        cols = [AI_A, mix(AI_A, AI_B, 0.5), AI_B]
+        for k in range(3):
+            self._dots.append(self.create_oval(0, 0, 0, 0, fill=cols[k], outline=""))
+        self._text = self.create_text(48, h // 2, text=text, anchor="w", fill=MUTED, font=self.font)
+        self.h = h
+        self._tick()
+
+    def set_text(self, text):
+        self.base = text
+        self.itemconfigure(self._text, text=text)
+        self.configure(width=min(48 + self.font.measure(text) + 10, 900))
+
+    def _tick(self):
+        import math
+        if not self.winfo_exists():
+            return
+        for k, dot in enumerate(self._dots):
+            p = (math.sin(self._i / 3.0 - k * 0.9) + 1) / 2  # 0..1, a wave running through the dots
+            r = 2.5 + 2.5 * p
+            cx, cy = 10 + k * 13, self.h / 2 - 3 * p
+            self.coords(dot, cx - r, cy - r, cx + r, cy + r)
+        self._i += 1
+        self.after(60, self._tick)
+
+
 class Pill(tk.Canvas):
     """A small rounded label (status, tags). set(text, fg, bg)."""
 
@@ -567,15 +860,16 @@ class Pill(tk.Canvas):
 
 
 class ClickCard(tk.Canvas):
-    """A rounded white card with a title and a line of text; orange outline on hover; click = command."""
+    """A rounded white card with a title and a line of text; orange outline on hover; click = command.
+    ai=True: the GOLD bot's style - a sparkle and a glowing AI-gradient edge on hover."""
 
-    def __init__(self, parent, title, text, command, bg=BG, width=300):
+    def __init__(self, parent, title, text, command, bg=BG, width=300, ai=False):
         self.f1 = tkfont.Font(family=FONT, size=10, weight="bold")
         self.f2 = tkfont.Font(family=FONT, size=9)
         h = 28 + self.f1.metrics("linespace") + self.f2.metrics("linespace") + 4
         super().__init__(parent, width=width, height=h, background=bg, highlightthickness=0, borderwidth=0,
                          cursor="hand2")
-        self.title, self.text, self._imgs = title, text, {}
+        self.title, self.text, self._imgs, self.ai = title, text, {}, ai
         self.bind("<Configure>", lambda e: self._draw(False))
         self.bind("<Enter>", lambda e: self._draw(True))
         self.bind("<Leave>", lambda e: self._draw(False))
@@ -588,10 +882,22 @@ class ClickCard(tk.Canvas):
         key = (w, h, hover)
         if key not in self._imgs:
             self._imgs = {k: v for k, v in self._imgs.items() if k[:2] == (w, h)}
-            self._imgs[key] = ImageTk.PhotoImage(rounded_image(w, h, 16, CARD, BTN_HOVER_LINE if hover else LINE,
-                                                               width=2 if hover else 1))
+            if self.ai:
+                fill = AI_SOFT if hover else mix(CARD, AI_SOFT, 0.45)
+                ring = (AI_A, AI_B) if hover else (mix(AI_A, CARD, 0.55), mix(AI_B, CARD, 0.55))
+                self._imgs[key] = ImageTk.PhotoImage(gradient_ring(w, h, 16, *ring, width=2 if hover else 1,
+                                                                   fill=_hex(fill) + (255,)))
+            else:
+                self._imgs[key] = ImageTk.PhotoImage(rounded_image(w, h, 16, CARD, BTN_HOVER_LINE if hover else LINE,
+                                                                   width=2 if hover else 1))
         self.delete("all")
         self.create_image(0, 0, image=self._imgs[key], anchor="nw")
+        if self.ai:
+            self.create_text(18, 14, text="✦", anchor="nw", fill=AI_B if hover else AI_A, font=self.f1)
+            self.create_text(38, 14, text=self.title, anchor="nw", fill=AI_A if hover else INK, font=self.f1)
+            self.create_text(18, 18 + self.f1.metrics("linespace"), anchor="nw", fill=MUTED, font=self.f2,
+                             text=fit_text(self.text, self.f2, w - 36, 1))
+            return
         self.create_text(18, 14, text=self.title, anchor="nw", fill=ORANGE_DARK if hover else INK, font=self.f1)
         self.create_text(18, 18 + self.f1.metrics("linespace"), anchor="nw", fill=MUTED, font=self.f2,
                          text=fit_text(self.text, self.f2, w - 36, 1))
@@ -607,7 +913,10 @@ class Bubble(tk.Canvas):
         w = max(f.measure(l) for l in lines) + 32
         h = len(lines) * f.metrics("linespace") + 20
         super().__init__(parent, width=w, height=h, background=bg, highlightthickness=0, borderwidth=0)
-        self._img = ImageTk.PhotoImage(rounded_image(w, h, min(18, h // 2), fill))
+        if isinstance(fill, tuple):  # (c0, c1): a gradient bubble (the AI chat)
+            self._img = ImageTk.PhotoImage(gradient_rounded(w, h, min(18, h // 2), *fill))
+        else:
+            self._img = ImageTk.PhotoImage(rounded_image(w, h, min(18, h // 2), fill))
         self.create_image(0, 0, image=self._img, anchor="nw")
         self.create_text(16, 10, text=wrapped, anchor="nw", fill=fg, font=f)
 
@@ -804,6 +1113,15 @@ class SideNav(tk.Frame):
             return
         active, hover = c.state == "active", c.state == "hover"
         c.delete("all")
+        if NEO and active:  # Futuristic: a glowing gradient pill, white text
+            key = ("neo", w, h)
+            if key not in self._imgs:
+                self._imgs[key] = ImageTk.PhotoImage(gradient_rounded(w, h, h // 2, ORANGE, ACCENT2))
+            c.create_image(0, 0, image=self._imgs[key], anchor="nw")
+            c.create_text(26, h // 2, text=c.icon, fill="white", font=self.f_icon)
+            c.create_text(50, h // 2, text=c.text, anchor="w", fill="white", font=self.f_bold)
+            c.create_oval(w - 22, h // 2 - 3, w - 16, h // 2 + 3, fill="white", outline="")
+            return
         if active or hover:
             c.create_image(0, 0, image=self._pill(w, h, ORANGE_SOFT if active else HOVER), anchor="nw")
         c.create_text(26, h // 2, text=c.icon, fill=ORANGE if active else MUTED, font=self.f_icon)
@@ -862,6 +1180,14 @@ def style_rounded(style, root):
         return p
 
     def img(w, h, r, fill, outline=None, width=1):
+        if NEO and fill in ("ACCENT", "ACCENT_HOT"):  # Futuristic: gradient pills
+            hot = fill == "ACCENT_HOT"
+            return photo(gradient_rounded(w, h, r, mix(ORANGE, "#ffffff", 0.15) if hot else ORANGE,
+                                          mix(ACCENT2, "#ffffff", 0.15) if hot else ACCENT2))
+        if fill == "ACCENT":
+            fill = ORANGE
+        elif fill == "ACCENT_HOT":
+            fill = ORANGE_DARK
         return photo(rounded_image(w, h, r, fill, outline, width=width))
 
     # Buttons: pills
@@ -872,9 +1198,9 @@ def style_rounded(style, root):
                          ("disabled", img(W, H, R, DISABLED, DISABLED_LINE)),
                          ("pressed", img(W, H, R, BTN_PRESS, ORANGE)),
                          ("active", img(W, H, R, BTN_HOVER, BTN_HOVER_LINE)), **b)
-    style.element_create("AButton.border", "image", img(W, H, R, ORANGE),
+    style.element_create("AButton.border", "image", img(W, H, R, "ACCENT"),
                          ("disabled", img(W, H, R, ACCENT_OFF)),
-                         ("pressed", img(W, H, R, ORANGE_DARK)), ("active", img(W, H, R, ORANGE_DARK)), **b)
+                         ("pressed", img(W, H, R, "ACCENT_HOT")), ("active", img(W, H, R, "ACCENT_HOT")), **b)
     style.element_create("SButton.border", "image", img(W, H, R, CARD),
                          ("pressed", img(W, H, R, HOVER)), ("active", img(W, H, R, HOVER)), **b)
     for name, element in (("TButton", "RButton.border"), ("Accent.TButton", "AButton.border"),
@@ -907,13 +1233,13 @@ def style_rounded(style, root):
         ("Combobox.padding", {"expand": "1", "sticky": "nsew", "children": [
             ("Combobox.textarea", {"sticky": "nsew"})]})]})])
     style.configure("TCombobox", padding=(10, 2), arrowsize=12, background=FIELD, arrowcolor=MUTED,
-                    fieldbackground=FIELD)
+                    fieldbackground=FIELD, bordercolor=FIELD, lightcolor=FIELD, darkcolor=FIELD)
     style.map("TCombobox", background=[("active", FIELD), ("pressed", FIELD)],
               fieldbackground=[("readonly", FIELD)])
 
     # Segmented selector (radio buttons as pills)
     style.element_create("RSeg.border", "image", img(W, H, R, CARD, BTN_LINE),
-                         ("selected", img(W, H, R, ORANGE)), ("active", img(W, H, R, BTN_HOVER, BTN_HOVER_LINE)), **b)
+                         ("selected", img(W, H, R, "ACCENT")), ("active", img(W, H, R, BTN_HOVER, BTN_HOVER_LINE)), **b)
     style.layout("Seg.TRadiobutton", [("RSeg.border", {"sticky": "nsew", "children": [
         ("Radiobutton.padding", {"sticky": "nsew", "children": [("Radiobutton.label", {"sticky": "nsew"})]})]})])
     style.configure("Seg.TRadiobutton", padding=(12, 2), background=CARD, font=(FONT, 9, "bold"))
@@ -923,7 +1249,7 @@ def style_rounded(style, root):
     r2 = h2 // 2 - 1
     b2 = dict(border=(r2, r2), padding=(r2 // 2 + 2, 0), sticky="nsew")
     style.element_create("RSegS.border", "image", img(w2, h2, r2, CARD, BTN_LINE),
-                         ("selected", img(w2, h2, r2, ORANGE)), ("active", img(w2, h2, r2, BTN_HOVER, BTN_HOVER_LINE)),
+                         ("selected", img(w2, h2, r2, "ACCENT")), ("active", img(w2, h2, r2, BTN_HOVER, BTN_HOVER_LINE)),
                          **b2)
     style.layout("SegSm.TRadiobutton", [("RSegS.border", {"sticky": "nsew", "children": [
         ("Radiobutton.padding", {"sticky": "nsew", "children": [("Radiobutton.label", {"sticky": "nsew"})]})]})])
@@ -944,7 +1270,12 @@ def style_rounded(style, root):
         im = Image.new("RGBA", (S * s, S * s), (0, 0, 0, 0))
         d = ImageDraw.Draw(im)
         box = (2 * s, 6 * s, 20 * s, 24 * s)
-        if on:
+        if on and NEO:
+            g = gradient_rounded(box[2] - box[0], box[3] - box[1], 6 * s, ORANGE, ACCENT2)
+            im.alpha_composite(g, (box[0], box[1]))
+            d.line([(6 * s, 15 * s), (10 * s, 19 * s), (17 * s, 11 * s)], fill="white", width=int(2.4 * s),
+                   joint="curve")
+        elif on:
             d.rounded_rectangle(box, radius=6 * s, fill=ORANGE)
             d.line([(6 * s, 15 * s), (10 * s, 19 * s), (17 * s, 11 * s)], fill="white", width=int(2.4 * s),
                    joint="curve")

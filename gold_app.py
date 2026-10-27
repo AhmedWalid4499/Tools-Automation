@@ -568,10 +568,10 @@ class App(tk.Tk):
         """Save the theme; the colours are set when the app starts, so offer to restart now."""
         if name == gui.THEME:
             return
-        self.settings["theme"] = name
+        self.settings.update(theme=name, theme_v3=1)  # the user's own choice from now on
         self._store_settings()
         win, body = self._dialog("Appearance", width=440)
-        self._dialog_head(body, f"Switch to {name} mode?",
+        self._dialog_head(body, f"Switch to the {gui.THEME_NAMES.get(name, name)} look?",
                           "GOLD Express restarts to change its colours (a few seconds). Nothing is lost - "
                           "your settings and saved chats stay.", "")
         row = tk.Frame(body, background=CARD)
@@ -989,8 +989,9 @@ class App(tk.Tk):
         self.update_btn.pack(fill="x", pady=(0, 2))
         ttk.Button(nav.bottom, text="⚙  Settings", style="Side.TButton",
                    command=self._open_settings).pack(fill="x")
-        ttk.Button(nav.bottom, text="☼  Light mode" if gui.DARK else "☾  Dark mode", style="Side.TButton",
-                   command=lambda: self._set_theme("light" if gui.DARK else "dark")).pack(fill="x", pady=(2, 0))
+        nxt = {"neo": "light", "light": "dark", "dark": "neo"}[gui.THEME]  # the look the button switches to
+        ttk.Button(nav.bottom, text={"light": "☼  Light mode", "dark": "☾  Dark mode", "neo": "✦  Futuristic"}[nxt],
+                   style="Side.TButton", command=lambda: self._set_theme(nxt)).pack(fill="x", pady=(2, 0))
         tk.Label(nav.bottom, text=f"Version {__version__}  ·  © {AUTHOR}", bg=CARD, fg=FAINT,
                  font=(FONT, 8), anchor="w").pack(fill="x", padx=12, pady=(10, 0))
         self.bulk_stop_flag = threading.Event()
@@ -1158,9 +1159,10 @@ class App(tk.Tk):
         look = tk.Frame(body, background=CARD)
         look.grid(row=20, column=0, columnspan=4, sticky="w", pady=2)
         theme = tk.StringVar(value=gui.THEME)
-        for value, label in (("light", "☼  Light"), ("dark", "☾  Dark")):
+        for value, label in (("neo", "✦  Futuristic"), ("light", "☼  Light"), ("dark", "☾  Dark")):
             ttk.Radiobutton(look, text=label, value=value, variable=theme, style="SegSm.TRadiobutton",
-                            command=lambda: (close(), self._set_theme(theme.get()))).pack(side="left", padx=(0, 4))
+                            command=lambda: theme.get() != gui.THEME and (close(), self._set_theme(theme.get()))
+                            ).pack(side="left", padx=(0, 4))
         tk.Label(look, text="GOLD Express restarts to switch", bg=CARD, fg=MUTED, font=(FONT, 8)).pack(
             side="left", padx=10)
         speed_row = tk.Frame(body, background=CARD)
@@ -2093,8 +2095,8 @@ class App(tk.Tk):
         lower = tk.Frame(f, background=BG)
         lower.pack(fill="both", expand=True)
         lower.rowconfigure(0, weight=1)
-        lower.columnconfigure(0, weight=1, uniform="ovlower")   # orders (a narrow list)
-        lower.columnconfigure(1, weight=3, uniform="ovlower")   # the selected order's details
+        lower.columnconfigure(0, weight=1, minsize=int(330 * self.winfo_fpixels("1i") / 96))  # orders (narrow)
+        lower.columnconfigure(1, weight=3)   # the selected order's details
 
         # Orders: type them, read them, pick one
         lt = self._tile(lower)
@@ -2401,7 +2403,7 @@ class App(tk.Tk):
         tt = self._tile(f, fill="both", expand=True)
         body = tt.body
         head = self._tile_head(body, "Order tracker", "")
-        self.tr_export_btn = self._btn(head, "⤓  Excel tracker", self._tr_export, "Accent.TButton")
+        self.tr_export_btn = self._btn(head, "↓  Excel tracker", self._tr_export, "Accent.TButton")
         self.tr_export_btn.pack(side="right")
         self.tr_audience = tk.StringVar(value=self.settings.get("tracker_view", "management"))
         seg = tk.Frame(head, background=CARD)
@@ -3610,28 +3612,24 @@ class App(tk.Tk):
         ct = self._tile(f, pad=8)
         ct.grid(row=0, column=1, sticky="nsew")
         f = ct.body  # the chat itself (right)
-        # Header: what it does | order in context, New chat
-        head = tk.Frame(f, background=CARD, padx=12, pady=4)
-        head.pack(fill="x")
-        bot_png = self._asset_path("bot.png")
-        if bot_png:  # the bot itself, floating next to its name (click it!)
-            gui.Bot(head, bot_png, size=int(34 * scale), bg=CARD).pack(side="left", padx=(0, 8))
-        tk.Label(head, text="The Friendly GOLD bot", bg=CARD, fg=INK, font=(FONT, 11, "bold")).pack(side="left")
-        self.ask_hint = tk.Label(head, text="   reads GOLD and the Org Chart live for you - it never changes "
-                                            "anything", bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w")
-        self.ask_hint.pack(side="left", fill="x", expand=True)
-        self._btn(head, "＋  New chat", self._ask_new).pack(side="right")
-        self.ask_chip = gui.Pill(head, "", ORANGE_DARK, ORANGE_SOFT, bg=CARD)
+        # Header: the AI banner - the bot, its name, what it does, the order in view, New chat
+        self.ask_banner = gui.AIBanner(f, self._asset_path("bot.png"), "The Friendly GOLD bot",
+                                       "Reads GOLD and the Org Chart live for you - it never changes anything",
+                                       on_new=self._ask_new, bg=CARD, height=int(62 * scale))
+        self.ask_banner.pack(fill="x", padx=4, pady=(0, 6))
 
         # Composer (bottom): a rounded field with a round send button
         foot = tk.Frame(f, background=CARD, padx=8, pady=4)
         foot.pack(side="bottom", fill="x")
-        comp = gui.Tile(foot, radius=14, pad=0, bg=CARD, fill=gui.FIELD, shadow=False, outline=gui.FIELD_LINE)
+        idle_edge = (gui.mix(gui.AI_A, gui.FIELD, 0.45), gui.mix(gui.AI_B, gui.FIELD, 0.45), 1)
+        comp = gui.Tile(foot, radius=14, pad=0, bg=CARD, fill=gui.FIELD, shadow=False, outline=idle_edge)
         comp.pack(fill="x")
         box = comp.body
         d = int(28 * scale)
-        self._send_imgs = {s: ImageTk.PhotoImage(gui.rounded_image(d, d, d // 2, c), master=self)
-                           for s, c in (("on", ORANGE), ("hover", ORANGE_DARK), ("off", gui.ACCENT_OFF))}
+        self._send_imgs = {"on": ImageTk.PhotoImage(gui.gradient_rounded(d, d, d // 2, gui.AI_A, gui.AI_B), master=self),
+                           "hover": ImageTk.PhotoImage(gui.gradient_rounded(d, d, d // 2, gui.AI_B, gui.AI_A),
+                                                       master=self),
+                           "off": ImageTk.PhotoImage(gui.rounded_image(d, d, d // 2, gui.ACCENT_OFF), master=self)}
         self.ask_send = tk.Label(box, image=self._send_imgs["on"], text="", compound="center",
                                  fg="white", font=(gui.ICONS, 9), bg=gui.FIELD, cursor="hand2", bd=0)
         self.ask_send.pack(side="right", padx=(6, 0))  # packed first: always visible
@@ -3649,7 +3647,7 @@ class App(tk.Tk):
         self.ask_input.bind("<Return>", lambda e: (self._ask_send(), "break")[1])
         self.ask_input.bind("<Shift-Return>", lambda e: self.after(1, self._ask_input_changed))
         self.ask_input.bind("<KeyRelease>", lambda e: self._ask_input_changed())
-        comp_outline = {True: ORANGE, False: gui.FIELD_LINE}
+        comp_outline = {True: (gui.AI_A, gui.AI_B, 2), False: idle_edge}
         for ev, on in (("<FocusIn>", True), ("<FocusOut>", False)):
             self.ask_input.bind(ev, lambda e, on=on: (setattr(comp, "outline", comp_outline[on]),
                                                        setattr(comp, "_size", None), comp._soon()))
@@ -3676,10 +3674,13 @@ class App(tk.Tk):
                   indent=self.ASK_INDENT)
         t.tag_configure("right", justify="right", spacing1=14, spacing3=2, rmargin=4)
         t.tag_configure("meta", font=(FONT, 8), foreground=gui.PLACEHOLDER)
-        t.tag_configure("who", font=(FONT, 10, "bold"), foreground=INK, spacing1=16, spacing3=4)
+        t.tag_configure("who", font=(FONT, 10, "bold"), foreground=gui.AI_A, spacing1=16, spacing3=4)
+        t.tag_configure("aibadge", font=(FONT, 8, "bold"), foreground=gui.AI_B)
         t.tag_raise("meta")
         t.tag_configure("center", justify="center")
-        t.tag_configure("hero", font=(FONT, 13, "bold"), foreground=INK, justify="center", spacing1=4)
+        t.tag_configure("hero", font=("Segoe UI Semibold", 15), foreground=INK, justify="center", spacing1=4)
+        t.tag_configure("spark", font=("Segoe UI Semibold", 15), foreground=gui.AI_A, justify="center")
+        t.tag_configure("spark2", font=("Segoe UI Semibold", 15), foreground=gui.AI_B, justify="center")
         t.tag_configure("sub", font=(FONT, 10), foreground=MUTED, justify="center", spacing1=4, spacing3=16)
         t.tag_configure("err", foreground=RED, font=(FONT, 10), lmargin1=self.ASK_INDENT + 2,
                         lmargin2=self.ASK_INDENT + 2, spacing1=2, spacing3=6)
@@ -3713,13 +3714,7 @@ class App(tk.Tk):
 
     def _ask_refresh_chip(self):
         order = self._ask_context_order()
-        if order:
-            self.ask_chip.set(f"Order in view:  {order}")
-            self.ask_chip.pack(side="right", padx=(0, 12))
-            self.ask_hint.pack_forget()  # packed again last: the pill keeps its size, the hint gets the rest
-            self.ask_hint.pack(side="left", fill="x", expand=True)
-        else:
-            self.ask_chip.pack_forget()
+        self.ask_banner.set_chip(f"Order in view:  {order}" if order else "")
         self._ask_input_changed()
 
     def _ask_input_changed(self):
@@ -3775,12 +3770,16 @@ class App(tk.Tk):
             t.insert("end", "\n", ("center",))
             bot_png = self._asset_path("bot.png")
             scale = self.winfo_fpixels("1i") / 96
-            t.window_create("end", window=gui.Bot(t, bot_png, size=int(118 * scale), bg=self.CHAT_BG)
+            t.window_create("end", window=gui.Bot(t, bot_png, size=int(130 * scale), bg=self.CHAT_BG, halo=True)
                             if bot_png else tk.Label(t, text="✦", bg=ORANGE, fg="white", font=(FONT, 18, "bold")))
             t.tag_add("center", "end-2c")
             hour = datetime.now().hour
             hello = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
-            t.insert("end", f"\n{hello}! I'm the Friendly GOLD bot\n", ("hero",))
+            t.insert("end", "\n", ("hero",))
+            t.insert("end", "✦  ", ("spark",))
+            t.insert("end", f"{hello}! I'm the Friendly GOLD bot", ("hero",))
+            t.insert("end", "  ✦", ("spark2",))
+            t.insert("end", "\n", ("hero",))
             t.insert("end", (f"Ask me anything about order {order} (open in the Order explorer) or any other order."
                              if order else "Ask me anything about a GOLD order - deadlines, pricing, sites, people.")
                      + "\n", ("sub",))
@@ -3792,7 +3791,7 @@ class App(tk.Tk):
             for i, (title, desc, q) in enumerate(self.ASK_SUGGESTIONS):
                 question = q.format(order=order or "10-1234567")
                 card = gui.ClickCard(grid, title, desc, lambda q=question: self._ask_suggestion(q),
-                                     bg=self.CHAT_BG, width=int(200 * scale))
+                                     bg=self.CHAT_BG, width=int(200 * scale), ai=True)
                 card.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
                 cards.append(card)
 
@@ -3982,7 +3981,8 @@ class App(tk.Tk):
             t.mark_gravity("question", "left")
             t.insert("end", f"You · {stamp}\n", ("right", "meta"))
             width = max(300, int(t.winfo_width() * 0.62))
-            t.window_create("end", window=gui.Bubble(t, question, width, bg=self.CHAT_BG))
+            t.window_create("end", window=gui.Bubble(t, question, width, fill=(gui.AI_A, gui.AI_B),
+                                                       bg=self.CHAT_BG))
             t.tag_add("right", "end-2c")
             t.insert("end", "\n", ("right",))
         self._ask_write(write)
@@ -3997,26 +3997,16 @@ class App(tk.Tk):
                 bot_png = self._asset_path("bot.png")
                 if bot_png:  # the bot bobs along while it works
                     t.window_create("end", window=gui.Bot(t, bot_png, size=int(40 * self.winfo_fpixels("1i") / 96),
-                                                          bg=self.CHAT_BG, mode="busy", clickable=False))
+                                                          bg=self.CHAT_BG, mode="busy", clickable=False, halo=True))
                     t.insert("end", "  ", ("who",))
                 else:
                     self._ask_avatar(t)
-                lab = tk.Label(t, bg=self.CHAT_BG, fg=MUTED, font=(FONT, 9, "italic"))
-                t.window_create("end", window=lab)
+                row = gui.AIThinking(t, bg=self.CHAT_BG)  # glowing dots pulsing in the AI colours
+                t.window_create("end", window=row)
                 t.insert("end", "\n", ("who",))
-                self.ask_pending = lab
+                self.ask_pending = row
             self._ask_write(write)
-            self._ask_pulse(0)
-        self.ask_pending.configure(text=text)
-        self.ask_pending.base = text
-
-    def _ask_pulse(self, n):
-        lab = self.ask_pending
-        if lab is None or not lab.winfo_exists():
-            return
-        base = getattr(lab, "base", "").rstrip(".")
-        lab.configure(text=base + "." * (n % 3 + 1))
-        self.after(450, self._ask_pulse, n + 1)
+        self.ask_pending.set_text(text)
 
     def _ask_end_thinking(self):
         if self.ask_pending is not None:
@@ -4030,6 +4020,7 @@ class App(tk.Tk):
             t.insert("end", "\n", ("who",))
             self._ask_avatar(t)
             t.insert("end", "GOLD bot", ("who",))
+            t.insert("end", "  ✦ AI", ("who", "aibadge"))
             t.insert("end", "   " + datetime.now().strftime("%H:%M") + "\n", ("who", "meta"))
             if not ok:
                 t.insert("end", "⚠  " + answer + "\n", ("err",))
