@@ -1,5 +1,14 @@
 # GOLD Express - what's new
 
+## 2.13.0
+Privacy of the GOLD bot:
+- **Nothing kept on the AI's side by GOLD Express**: no prompt caching (which stored the conversation
+  for a few minutes) and no server-side fallback (which recorded a fingerprint of it). GOLD data is
+  sent only to answer the question and is not used to train the AI.
+- **Chats are no longer saved** unless you tick "Save chats" - and then only on this PC, in its local
+  app-data folder that OneDrive never syncs (chats saved earlier were moved there). With saving off,
+  a chat is gone when you start a new one or close the app.
+
 ## 2.12.0
 - **New: Tracker** (Overview > Tracker) - the orders you type in the Overview as a tracker to share:
   project, site, service, status, target delivery date, delivery status, next milestone and your own

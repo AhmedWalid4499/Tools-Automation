@@ -48,7 +48,10 @@ SETTINGS_FILE = HERE / "gold_app_settings.json"
 AI_KEY_CACHE = HERE / "ai_key.bin"  # the team's AI key, encrypted for this Windows user
 OC_CACHE = HERE / "orgchart_cache.json"  # Org Chart lookups of GOLD team members (kept 7 days)
 MY_SNAPSHOT = HERE / "my_orders_snapshot.json"  # last My orders read, to notice changes
-CHATS_DIR = HERE / "chats"  # saved Ask GOLD chats
+# Saved GOLD bot chats hold GOLD data: only on this PC, in the local app-data folder that OneDrive never
+# syncs (not Documents, which is often in OneDrive). Saving is off unless the user ticks "Save chats".
+CHATS_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / APP_NAME / "chats"
+_OLD_CHATS_DIR = HERE / "chats"  # where chats were kept before 2.13.0
 TRACKER_COMMENTS = HERE / "tracker_comments.json"  # Overview > Tracker: comments / next steps per order
 OA_FILE = HERE / "apm_open_orders.xlsx"  # the latest APM Open Orders sheet (replaced on every refresh)
 
@@ -82,7 +85,7 @@ def load_settings():
          # Windows notifications
          "notify_on": True, "notify_orders": True, "notify_every": "30", "notify_digest": True,
          "notify_updates": True, "notify_tasks": True, "notified_version": "", "digest_date": "",
-         "theme": "light", "save_chats": True, "bot_speed": "fast"}
+         "theme": "light", "save_chats": False, "bot_speed": "fast"}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -91,7 +94,29 @@ def load_settings():
     old = saved.pop("projects", {}).get(saved.pop("project", ""), {})
     s.update({k: v for k, v in old.items() if v})
     s.update(saved)
+    if "chat_privacy" not in saved:  # 2.13.0: chats are no longer saved unless the user turns it on
+        s.update(save_chats=False, chat_privacy=1)
     return s
+
+
+def move_old_chats():
+    """Chats saved before 2.13.0 sat in the data folder (Documents, often synced to OneDrive): move them to
+    this PC's local app-data folder, then remove the old folder."""
+    if not _OLD_CHATS_DIR.is_dir() or _OLD_CHATS_DIR.resolve() == CHATS_DIR.resolve():
+        return 0
+    moved = 0
+    CHATS_DIR.mkdir(parents=True, exist_ok=True)
+    for p in _OLD_CHATS_DIR.glob("*.json"):
+        try:
+            p.replace(CHATS_DIR / p.name)
+            moved += 1
+        except OSError:
+            pass
+    try:
+        _OLD_CHATS_DIR.rmdir()  # only if empty
+    except OSError:
+        pass
+    return moved
 
 
 def save_settings(s):
@@ -312,6 +337,7 @@ class App(tk.Tk):
         self.minsize(1040, 660)
         self.configure(background=CANVAS)
         self.settings = load_settings()
+        moved_chats = move_old_chats()
         self.dpm_names = gn.load()
         self.ui_queue = queue.Queue()
         self.worker = Worker(self)
@@ -351,6 +377,9 @@ class App(tk.Tk):
         self.after(4000, lambda: self._check_updates(quiet=True))  # quiet check at start-up
         # Sign in to GOLD right away, in the background, so the first action doesn't wait for it.
         self.after(300, self._prewarm)
+        if moved_chats:
+            self.after(1500, lambda: self.log(f"{moved_chats} saved GOLD bot chat(s) moved to this PC's local folder "
+                                              "(out of Documents / OneDrive)."))
         # Background check of My orders for notifications (only while the user is not working in the app)
         self._last_input = time.time()
         for ev in ("<Any-KeyPress>", "<Any-Button>"):
@@ -3679,6 +3708,9 @@ class App(tk.Tk):
             t.insert("end", (f"Ask me anything about order {order} (open in the Order explorer) or any other order."
                              if order else "Ask me anything about a GOLD order - deadlines, pricing, sites, people.")
                      + "\n", ("sub",))
+            t.insert("end", "🔒 Private: GOLD data is sent to the AI only to answer your question, is not used to "
+                            "train it, and nothing is cached on the AI's side. Chats are not saved unless you tick "
+                            "\"Save chats\" (then only on this PC).\n", ("sub",))
             grid = tk.Frame(t, background=self.CHAT_BG)
             cards = []
             for i, (title, desc, q) in enumerate(self.ASK_SUGGESTIONS):
@@ -3728,11 +3760,14 @@ class App(tk.Tk):
 
     def _build_ask_history(self, f):
         self.ask_log, self.ask_chat_id, self.ask_restore = [], None, None
-        self.save_chats = tk.BooleanVar(value=self.settings.get("save_chats", True))
+        self.save_chats = tk.BooleanVar(value=self.settings.get("save_chats", False))
         head = self._tile_head(f, "History", "")
-        ttk.Checkbutton(f, text="Save chats", variable=self.save_chats, style="Card.TCheckbutton",
+        ttk.Checkbutton(f, text="Save chats (on this PC only)", variable=self.save_chats,
+                        style="Card.TCheckbutton",
                         command=lambda: (self.settings.update(save_chats=self.save_chats.get()),
-                                         save_settings(self.settings))).pack(anchor="w", pady=(0, 6))
+                                         save_settings(self.settings))).pack(anchor="w", pady=(0, 2))
+        tk.Label(f, text="Off: a chat is gone when you start a new one or close the app.", bg=CARD, fg=FAINT,
+                 font=(FONT, 8), anchor="w", justify="left", wraplength=200).pack(fill="x", pady=(0, 6))
         self.chat_find = tk.StringVar()
         ent = ttk.Entry(f, textvariable=self.chat_find, font=(FONT, 9))
         ent.pack(fill="x", pady=(0, 6))

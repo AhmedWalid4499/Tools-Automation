@@ -493,16 +493,17 @@ class Chat:
         self.model, self.effort, self.fast = model, effort, fast
 
     def _request(self):
-        betas = ["server-side-fallback-2026-07-01"]  # if a safety check declines, another model answers
+        # Privacy: nothing that keeps the conversation on Anthropic's side after the answer - no prompt
+        # caching (it stores the prompt for a few minutes) and no server-side fallback (it records a
+        # fingerprint of the conversation). Each request carries only this chat, which lives in this app.
         extra = {}
         if self.fast:  # Opus fast mode (research preview): faster output, higher price
-            betas.append("fast-mode-2026-02-01")
+            extra["betas"] = ["fast-mode-2026-02-01"]
             extra["extra_body"] = {"speed": "fast"}
         return dict(model=self.model, max_tokens=16000, system=system_prompt(),
                     # strict: Claude's arguments always match the schemas exactly
                     tools=[{**t, "strict": True} for t in TOOLS], messages=self.messages,
-                    output_config={"effort": self.effort}, cache_control={"type": "ephemeral"},
-                    betas=betas, fallbacks="default", **extra)
+                    output_config={"effort": self.effort}, **extra)
 
     def _call(self, on_text=None):
         """One request, streamed. If fast mode is not available for this key, it carries on without it."""
