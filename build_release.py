@@ -27,6 +27,7 @@ ISCC = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Inno Setup 6" / "ISCC.ex
 # The DPM list (names + GOLD user IDs) is NOT packed into the app: the installer is downloadable from the public
 # Releases page. Users fill their list with DPM names > "Import DPM teams from Org Chart" (Orange sign-in).
 REPO = "AhmedWalid4499/Tools-Automation"
+STABLE_SETUP = "GOLD_Express_Setup.exe"  # also attached to every release (fixed download link)
 
 
 def geckodriver():
@@ -163,7 +164,11 @@ def publish(setup):
                               "GitHub.cli_*/bin/gh.exe")] if p.exists()), "gh")
     notes = BUILD / "release_notes.md"
     notes.write_text(release_notes(), encoding="utf-8")
-    subprocess.run([gh, "release", "create", f"v{__version__}", str(setup), "--repo", REPO,
+    # The same setup under a fixed name: .../releases/latest/download/GOLD_Express_Setup.exe is always the
+    # newest version (the download website links to it)
+    stable = BUILD / STABLE_SETUP
+    shutil.copyfile(setup, stable)
+    subprocess.run([gh, "release", "create", f"v{__version__}", str(setup), str(stable), "--repo", REPO,
                     "--title", f"GOLD Express {__version__}", "--notes-file", str(notes), "--latest"],
                    check=True)
     print(f"Published: https://github.com/{REPO}/releases/tag/v{__version__}")

@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GOLD Express</title>
+<meta name="description" content="GOLD Express - the desktop assistant for Orange Business GOLD order management. Download the latest version for Windows.">
+<link rel="icon" type="image/png" href="assets/logo_64.png">
+<style>
+  :root {
+    --bg: #F6F5F2; --card: #FFFFFF; --ink: #1F2328; --muted: #5F6670; --faint: #8A9099; --line: #E7E5E0;
+    --orange: #FF7900; --orange-dark: #D86400; --orange-soft: #FFF1E5; --green: #1E9E62; --shadow: 0 6px 24px rgba(31,35,40,.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15171A; --card: #1E2125; --ink: #ECEDEE; --muted: #A9AFB6; --faint: #7E858D; --line: #2D3136;
+      --orange-soft: #33230F; --shadow: 0 6px 24px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15171A; --card: #1E2125; --ink: #ECEDEE; --muted: #A9AFB6; --faint: #7E858D; --line: #2D3136;
+    --orange-soft: #33230F; --shadow: 0 6px 24px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.55 "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--orange-dark); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+  header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent);
+           backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  header .wrap { display: flex; align-items: center; gap: 14px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-weight: 700; font-size: 18px; }
+  .brand img { width: 34px; height: 34px; }
+  .brand span { color: var(--orange); font-weight: 400; }
+  nav { margin-left: auto; display: flex; gap: 22px; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 15px; }
+  nav a:hover { color: var(--ink); }
+
+  .hero { padding: 64px 0 40px; }
+  .hero .wrap { display: grid; grid-template-columns: 1.25fr .75fr; gap: 40px; align-items: center; }
+  .tag { display: inline-block; background: var(--orange-soft); color: var(--orange-dark); font-weight: 600;
+         font-size: 13px; padding: 5px 12px; border-radius: 999px; }
+  h1 { font-size: clamp(32px, 5vw, 50px); line-height: 1.1; margin: 14px 0 14px; letter-spacing: -.02em; }
+  h1 em { font-style: normal; color: var(--orange); }
+  .lead { font-size: 19px; color: var(--muted); max-width: 560px; margin: 0 0 26px; }
+  .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; background: var(--orange); color: #fff; text-decoration: none;
+         font-weight: 700; font-size: 17px; padding: 15px 26px; border-radius: 14px; box-shadow: 0 8px 20px rgba(255,121,0,.28);
+         transition: transform .12s ease, background .12s ease; }
+  .btn:hover { background: var(--orange-dark); transform: translateY(-1px); }
+  .btn svg { width: 20px; height: 20px; }
+  .btn.ghost { background: transparent; color: var(--ink); box-shadow: none; border: 1.5px solid var(--line); font-weight: 600; }
+  .btn.ghost:hover { background: var(--card); }
+  .meta { margin-top: 14px; color: var(--faint); font-size: 14px; }
+  .meta b { color: var(--muted); font-weight: 600; }
+  .bot { justify-self: center; width: min(300px, 80%); filter: drop-shadow(0 18px 30px rgba(255,121,0,.18));
+         animation: bob 3.2s ease-in-out infinite; }
+  @keyframes bob { 50% { transform: translateY(-10px); } }
+  @media (prefers-reduced-motion: reduce) { .bot { animation: none; } }
+
+  section { padding: 44px 0; }
+  h2 { font-size: 30px; margin: 0 0 8px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 28px; max-width: 640px; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px; box-shadow: var(--shadow); }
+  .card h3 { margin: 12px 0 6px; font-size: 18px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .card ul { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 14.5px; }
+  .card li { margin: 3px 0; }
+  .icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; color: #fff; }
+  .icon svg { width: 24px; height: 24px; }
+  .i1 { background: #1F86E0; } .i2 { background: #22A06B; } .i3 { background: #8A3FB8; } .i4 { background: #FF7900; }
+  .i5 { background: #E5484D; } .i6 { background: #128577; } .i7 { background: #F59E0B; } .i8 { background: #5B6470; }
+
+  .steps { counter-reset: s; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .step { position: relative; padding-top: 52px; }
+  .step::before { counter-increment: s; content: counter(s); position: absolute; top: 18px; left: 22px; width: 30px; height: 30px;
+                  border-radius: 50%; background: var(--orange); color: #fff; font-weight: 700; display: grid; place-items: center; font-size: 15px; }
+  .step h3 { margin-top: 4px; }
+  kbd { font: 600 13px "Segoe UI", system-ui, sans-serif; background: var(--orange-soft); color: var(--orange-dark);
+        border-radius: 6px; padding: 1px 7px; }
+  .req { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+  .req span { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-size: 14px; color: var(--muted); }
+
+  .safe { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .safe .card { display: flex; gap: 16px; align-items: flex-start; }
+  .safe .card .icon { flex: none; }
+  .safe .card h3 { margin-top: 0; }
+
+  .news { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px 26px; box-shadow: var(--shadow); }
+  .news h3 { margin: 0 0 4px; }
+  .news .when { color: var(--faint); font-size: 14px; margin-bottom: 12px; }
+  .news ul { margin: 0; padding-left: 20px; color: var(--muted); }
+  .news li { margin: 6px 0; }
+  .news li strong { color: var(--ink); }
+
+  details { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin-bottom: 10px; }
+  summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; color: var(--orange); font-size: 20px; line-height: 1; }
+  details[open] summary::after { content: "–"; }
+  details p { color: var(--muted); margin: 10px 0 2px; }
+
+  .final { text-align: center; padding: 56px 0 64px; }
+  .final h2 { margin-bottom: 10px; }
+  .final .cta { justify-content: center; margin-top: 18px; }
+  footer { border-top: 1px solid var(--line); padding: 22px 0 30px; color: var(--faint); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
+
+  @media (max-width: 880px) {
+    .hero .wrap { grid-template-columns: 1fr; }
+    .bot { width: 190px; order: -1; }
+    .grid, .steps { grid-template-columns: 1fr 1fr; }
+    nav { display: none; }
+  }
+  @media (max-width: 600px) {
+    .wrap { padding: 0 16px; }
+    .hero { padding-top: 32px; }
+    .grid, .steps, .safe { grid-template-columns: 1fr; }
+    .btn { width: 100%; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <a class="brand" href="#"><img src="assets/logo_64.png" alt="">GOLD<span>Express</span></a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#new">What's new</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <div>
+        <span class="tag">For Orange Business delivery teams</span>
+        <h1>Your GOLD orders, <em>in a few clicks</em>.</h1>
+        <p class="lead">GOLD Express is a friendly Windows app for GOLD order management. See your orders at a glance,
+          track deliveries, update many orders at once and ask the GOLD bot anything - without clicking through GOLD page by page.</p>
+        <div class="cta">
+          <a class="btn" id="download" href="https://github.com/AhmedWalid4499/Tools-Automation/releases/latest/download/GOLD_Express_Setup.exe">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            Download for Windows
+          </a>
+          <a class="btn ghost" href="#features">See what it does</a>
+        </div>
+        <div class="meta" id="meta">Latest version · free for Orange Business teams · updates itself</div>
+      </div>
+      <img class="bot" src="assets/bot.png" alt="The Friendly GOLD bot">
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>Everything you do in GOLD, faster</h2>
+      <p class="sub">GOLD Express signs in to GOLD for you (Orange single sign-on) and works in the background. Here is what you get.</p>
+      <div class="grid">
+        <div class="card">
+          <div class="icon i1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h4l3 7 4-14 3 7h4"/></svg></div>
+          <h3>My Orders</h3>
+          <p>A dashboard of the orders GOLD lists as yours.</p>
+          <ul><li>Counters: open, due in 30 days, late</li><li>Orders by status and customer</li><li>Customer, site reference, status, target date</li><li>Export to Excel</li></ul>
+        </div>
+        <div class="card">
+          <div class="icon i2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.4 3.4-5.5 6.5-5.5s5.7 2.1 6.5 5.5"/><path d="m16 11 2 2 4-4"/></svg></div>
+          <h3>Order Assignment</h3>
+          <p>Which APM has which open APM order - live from the daily APM Open Orders sheet.</p>
+          <ul><li>Assigned, unassigned and "not in the DPM list"</li><li>Filter by region (Europe, APAC, AME) or name</li><li>Excel dashboard with charts</li></ul>
+        </div>
+        <div class="card">
+          <div class="icon i3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></svg></div>
+          <h3>Overview &amp; Tracker</h3>
+          <p>The key facts of any orders, with a clear delivery status.</p>
+          <ul><li>Red / Amber / Green vs the target date</li><li>120-day lead time and order value</li><li>A tracker for management or customers, with your comments - ready to send in Excel</li></ul>
+        </div>
+        <div class="card">
+          <div class="icon i4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/></svg></div>
+          <h3>Order explorer</h3>
+          <p>Open an order and browse every tab in neat tables.</p>
+          <ul><li>Milestones, teams, pricing, notes</li><li>Screenshots and document downloads</li><li>Copy any table into Excel</li></ul>
+        </div>
+        <div class="card">
+          <div class="icon i5"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8.5 10h.01M12 10h.01M15.5 10h.01"/></svg></div>
+          <h3>The Friendly GOLD bot</h3>
+          <p>Ask in plain English: "What are the deadlines?", "Who is the STM?", "Which of my orders are late?"</p>
+          <ul><li>Reads GOLD live and answers in seconds</li><li>Tables and lists, not walls of text</li><li>Private: nothing kept by the AI</li></ul>
+        </div>
+        <div class="card">
+          <div class="icon i6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/><path d="m17 15 2 2 3-3"/></svg></div>
+          <h3>Bulk updates</h3>
+          <p>Change many orders in one go.</p>
+          <ul><li>Revised Target Date for a whole list (any date format)</li><li>Bulk assignment of the primary STM</li><li>Paste from Excel, Test-only mode, never saves the same order twice</li></ul>
+        </div>
+        <div class="card">
+          <div class="icon i7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5 5 16.5M12 11.5l7 5"/></svg></div>
+          <h3>Org Chart &amp; DPM names</h3>
+          <p>Find anyone at Orange Business and who they report to.</p>
+          <ul><li>Email, phone, manager chain</li><li>The team of the order you have open</li><li>APM teams filled in automatically</li></ul>
+        </div>
+        <div class="card">
+          <div class="icon i8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg></div>
+          <h3>Little things that help</h3>
+          <p>Made for working every day.</p>
+          <ul><li>Windows notifications for your orders</li><li>Dark mode</li><li>Excel-like copy, paste and fill down</li></ul>
+        </div>
+        <div class="card">
+          <div class="icon i1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></div>
+          <h3>Always up to date</h3>
+          <p>When a new version is out, the app tells you and updates itself in about a minute. Your settings and files stay.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>Install in a minute</h2>
+      <p class="sub">No administrator rights needed.</p>
+      <div class="steps">
+        <div class="card step">
+          <h3>Download</h3>
+          <p>Click <b>Download for Windows</b> above. You get <kbd>GOLD_Express_Setup.exe</kbd> (about 32 MB).</p>
+        </div>
+        <div class="card step">
+          <h3>Run the setup</h3>
+          <p>Open the file. If Windows shows "Windows protected your PC", click <kbd>More info</kbd> then <kbd>Run anyway</kbd>. Then click through the setup.</p>
+        </div>
+        <div class="card step">
+          <h3>Open GOLD Express</h3>
+          <p>Start it from the Start menu or desktop. It signs in to GOLD with your Orange account - nothing to set up.</p>
+        </div>
+      </div>
+      <div class="req">
+        <span>Windows 10 or 11</span><span>Mozilla Firefox installed</span><span>Orange network or VPN</span><span>Your GOLD access</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Safe by design</h2>
+      <p class="sub">GOLD Express only does what you ask.</p>
+      <div class="safe">
+        <div class="card">
+          <div class="icon i2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3 4 6v6c0 4.5 3.3 8 8 9 4.7-1 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></div>
+          <div><h3>Reads GOLD - changes it only when you confirm</h3><p>Everything is read-only, except the two bulk updates: they save only after you click Run update and confirm. Both have a Test-only mode.</p></div>
+        </div>
+        <div class="card">
+          <div class="icon i3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+          <div><h3>Your data stays yours</h3><p>The GOLD bot sends GOLD data only to answer your question - it is not used to train the AI and nothing is cached. Chats are not saved unless you choose to, and then only on your PC.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="new">
+    <div class="wrap">
+      <h2>What's new</h2>
+      <p class="sub">The latest version's release notes.</p>
+      <div class="news" id="news">
+        <h3>GOLD Express</h3>
+        <div class="when">See all versions on the <a href="https://github.com/AhmedWalid4499/Tools-Automation/releases">releases page</a>.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <h2>Questions</h2>
+      <p class="sub">&nbsp;</p>
+      <details><summary>Windows says "Windows protected your PC" - is it safe?</summary>
+        <p>Yes. The setup is not signed with a paid certificate, so Windows SmartScreen asks first. Click <b>More info</b>, then <b>Run anyway</b>.</p></details>
+      <details><summary>Do I need to install updates myself?</summary>
+        <p>No. GOLD Express checks for new versions and shows an update window - click <b>Update now</b> and it reopens on the new version in about a minute.</p></details>
+      <details><summary>Does it change anything in GOLD?</summary>
+        <p>Only when you run a bulk update (Revised Target Date or Bulk assignment) and confirm. Everything else - dashboards, overview, tracker, explorer, the GOLD bot - only reads GOLD.</p></details>
+      <details><summary>Why does it need Firefox?</summary>
+        <p>GOLD Express uses Firefox in the background to open GOLD with your Orange sign-in, the same way you would. You will not see it unless you turn it on in Settings.</p></details>
+      <details><summary>Where are my files and settings?</summary>
+        <p>Exports go to the folder set in Settings (Documents\GOLD Express\output by default). Settings and the DPM list stay on your PC.</p></details>
+      <details><summary>How do I uninstall it?</summary>
+        <p>Windows Settings &gt; Apps &gt; Installed apps &gt; GOLD Express &gt; Uninstall.</p></details>
+    </div>
+  </section>
+
+  <div class="final">
+    <div class="wrap">
+      <h2>Ready to try it?</h2>
+      <p class="sub" style="margin: 0 auto;">Download GOLD Express and open your first order in a minute.</p>
+      <div class="cta">
+        <a class="btn" href="https://github.com/AhmedWalid4499/Tools-Automation/releases/latest/download/GOLD_Express_Setup.exe">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Download for Windows
+        </a>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GOLD Express · created by Ahmed El-Bourgy · © 2026 Ahmed El-Bourgy. All rights reserved.</span>
+    <span><a href="https://github.com/AhmedWalid4499/Tools-Automation/releases">All versions</a></span>
+  </div>
+</footer>
+
+<script>
+  // The newest version and its release notes, read from GitHub (the download link never changes)
+  (function () {
+    var esc = function (s) { return s.replace(/[&<>"]/g, function (c) { return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); };
+    var inline = function (s) { return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/"(.+?)"/g, "“$1”"); };
+    fetch("https://api.github.com/repos/AhmedWalid4499/Tools-Automation/releases/latest")
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (rel) {
+        var version = (rel.tag_name || "").replace(/^v/, "");
+        var when = rel.published_at ? new Date(rel.published_at).toLocaleDateString(undefined, {day: "numeric", month: "long", year: "numeric"}) : "";
+        var asset = (rel.assets || []).filter(function (a) { return a.name === "GOLD_Express_Setup.exe"; })[0];
+        var size = asset ? " · " + Math.round(asset.size / 1048576) + " MB" : "";
+        document.getElementById("meta").innerHTML = "<b>Version " + esc(version) + "</b> · " + esc(when) + size + " · updates itself";
+        document.getElementById("download").setAttribute("title", "GOLD Express " + version);
+        // release notes (markdown list) -> a tidy list
+        var items = [], cur = null;
+        (rel.body || "").split(/\r?\n/).forEach(function (line) {
+          var m = line.match(/^\s*[-*]\s+(.*)$/);
+          if (m && !/^\s{2,}/.test(line)) { cur = m[1]; items.push(cur); }
+          else if (m) { items.push(m[1]); }
+          else if (line.trim() && items.length) { items[items.length - 1] += " " + line.trim(); }
+          else if (line.trim() && !items.length) { items.push(line.trim()); }
+        });
+        var html = "<h3>Version " + esc(version) + "</h3><div class=\"when\">" + esc(when) +
+          " · <a href=\"" + esc(rel.html_url || "#") + "\">release page</a></div>";
+        if (items.length) html += "<ul>" + items.map(function (t) { return "<li>" + inline(t) + "</li>"; }).join("") + "</ul>";
+        document.getElementById("news").innerHTML = html;
+      })
+      .catch(function () { /* offline or rate-limited: the static text and the download link still work */ });
+  })();
+</script>
+</body>
+</html>
