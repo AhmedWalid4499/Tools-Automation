@@ -834,6 +834,99 @@ class AIThinking(tk.Canvas):
         self.after(60, self._tick)
 
 
+class Tooltip:
+    """A small dark label under a widget while the mouse rests on it."""
+
+    def __init__(self, widget, text=""):
+        self.widget, self.text, self.win, self._job = widget, text, None, None
+        widget.bind("<Enter>", self._soon, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+
+    def _soon(self, e=None):
+        self._job = self.widget.after(450, self.show)
+
+    def show(self):
+        if not self.text or not self.widget.winfo_exists():
+            return
+        self.hide()
+        self.win = tk.Toplevel(self.widget)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        tk.Label(self.win, text=self.text, bg="#1F2233" if not NEO else "#2A2D66", fg="white", font=(FONT, 9),
+                 padx=10, pady=5).pack()
+        self.win.update_idletasks()
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2 - self.win.winfo_width() // 2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.win.geometry(f"+{max(x, 0)}+{y}")
+
+    def hide(self, e=None):
+        if self._job:
+            self.widget.after_cancel(self._job)
+            self._job = None
+        if self.win is not None:
+            self.win.destroy()
+            self.win = None
+
+
+class IconButton(tk.Canvas):
+    """A round icon button for the top bar (updates, look, settings): soft circle, highlight on hover,
+    a tooltip; set_highlight(True) makes it a glowing accent button with a dot (e.g. an update is ready)."""
+
+    def __init__(self, parent, icon, command, tip="", bg=BG, size=38, font=None):
+        super().__init__(parent, width=size, height=size, background=bg, highlightthickness=0, borderwidth=0,
+                         cursor="hand2")
+        self.icon, self.command, self.size = icon, command, size
+        self.font = font or (ICONS, 12)
+        self.hover = self.highlight = False
+        self._imgs = {}
+        self.tip = Tooltip(self, tip)
+        self.bind("<Enter>", lambda e: self._set_hover(True), add="+")
+        self.bind("<Leave>", lambda e: self._set_hover(False), add="+")
+        self.bind("<Button-1>", lambda e: self.command())
+        self._draw()
+
+    def set_tip(self, text):
+        self.tip.text = text
+
+    def set_icon(self, icon, font=None):
+        self.icon = icon
+        if font:
+            self.font = font
+        self._draw()
+
+    def set_highlight(self, on):
+        self.highlight = on
+        self._draw()
+
+    def _set_hover(self, on):
+        self.hover = on
+        self._draw()
+
+    def _circle(self, kind):
+        s = self.size
+        if kind not in self._imgs:
+            if kind == "hot":
+                im = gradient_rounded(s, s, s // 2, ORANGE, ACCENT2)
+            elif kind == "hover":
+                im = rounded_image(s, s, s // 2, HOVER if not NEO else "#262B66", ORANGE, width=1)
+            else:
+                im = rounded_image(s, s, s // 2, CARD, LINE if not NEO else "#2F347A", width=1)
+            self._imgs[kind] = ImageTk.PhotoImage(im)
+        return self._imgs[kind]
+
+    def _draw(self):
+        s = self.size
+        self.delete("all")
+        kind = "hot" if self.highlight else "hover" if self.hover else "normal"
+        self.create_image(0, 0, image=self._circle(kind), anchor="nw")
+        fg = "white" if self.highlight else (ORANGE_DARK if self.hover else INK)
+        self.create_text(s // 2, s // 2, text=self.icon, fill=fg, font=self.font)
+        if self.highlight:  # the "something new" dot
+            d = max(s // 5, 6)
+            self.create_oval(s - d - 1, 1, s - 1, d + 1, fill="#FF5C7C", outline=BG, width=2)
+
+
 class Pill(tk.Canvas):
     """A small rounded label (status, tags). set(text, fg, bg)."""
 

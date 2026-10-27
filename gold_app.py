@@ -467,8 +467,8 @@ class App(tk.Tk):
                 return
             if newer:
                 self.new_release = rel
-                self.ui(lambda: self.update_btn.configure(text=f"↑  Update to {rel['version']}",
-                                                          style="Accent.TButton"))
+                self.ui(lambda: (self.update_btn.set_highlight(True), self.update_btn.set_icon("\ue896"),
+                                 self.update_btn.set_tip(f"Update to {rel['version']}")))
                 self.log(f"A new version of {APP_NAME} is available: {rel['version']}")
                 if self.settings.get("notified_version") != rel["version"]:  # once per version
                     self.settings["notified_version"] = rel["version"]
@@ -491,7 +491,7 @@ class App(tk.Tk):
         if self.busy:  # e.g. still connecting to GOLD: offer the update as soon as that has finished
             if not getattr(self, "_update_waiting", False):
                 self._update_waiting = True
-                self.update_btn.configure(text="↑  Update when ready...")
+                self.update_btn.set_tip("The update starts when the current task has finished")
                 self.log("The update will start as soon as the current action has finished.")
                 self._update_when_idle(rel)
             return
@@ -508,7 +508,7 @@ class App(tk.Tk):
             self.after(500, self._update_when_idle, rel)
             return
         self._update_waiting = False
-        self.update_btn.configure(text=f"↑  Update to {rel['version']}")
+        self.update_btn.set_tip(f"Update to {rel['version']}")
         self._offer_update(rel)
 
     # ----- app-styled small windows
@@ -923,8 +923,19 @@ class App(tk.Tk):
         self.page_title.pack(anchor="w")
         self.page_sub = tk.Label(titles, text="", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w")
         self.page_sub.pack(anchor="w")
+        icons = tk.Frame(top, background=BG)
+        icons.pack(side="right", pady=(2, 0))
+        nxt = {"neo": "light", "light": "dark", "dark": "neo"}[gui.THEME]  # the look the theme button switches to
+        self.update_btn = gui.IconButton(icons, "\ue72c", lambda: self._check_updates(quiet=False),
+                                         tip="Check for updates")
+        theme_icon = {"light": ("\ue706", None), "dark": ("\ue708", None), "neo": ("\u2726", (FONT, 13))}[nxt]
+        self.theme_btn = gui.IconButton(icons, theme_icon[0], lambda: self._set_theme(nxt), font=theme_icon[1],
+                                        tip=f"Switch to the {gui.THEME_NAMES[nxt]} look")
+        self.settings_btn = gui.IconButton(icons, "\ue713", self._open_settings, tip="Settings")
+        for b in (self.update_btn, self.theme_btn, self.settings_btn):
+            b.pack(side="left", padx=(8, 0))
         self.status = gui.Pill(top, "Ready")
-        self.status.pack(side="right", pady=(4, 0))
+        self.status.pack(side="right", pady=(4, 0), padx=(0, 6))
         self._set_pill("Ready", "#7BD88F", "#2A2A2A")
 
         # Status line (bottom): last message + activity toggle; the log panel above it
@@ -984,14 +995,6 @@ class App(tk.Tk):
         nav.add(org, "Org Chart", "", "Find anyone at Orange Business and who they report to")
         nav.add(names, "DPM names", "", "The DPM list used by Order Assignment and Bulk assignment")
 
-        self.update_btn = ttk.Button(nav.bottom, text="↻  Check for updates", style="Side.TButton",
-                                     command=lambda: self._check_updates(quiet=False))
-        self.update_btn.pack(fill="x", pady=(0, 2))
-        ttk.Button(nav.bottom, text="⚙  Settings", style="Side.TButton",
-                   command=self._open_settings).pack(fill="x")
-        nxt = {"neo": "light", "light": "dark", "dark": "neo"}[gui.THEME]  # the look the button switches to
-        ttk.Button(nav.bottom, text={"light": "☼  Light mode", "dark": "☾  Dark mode", "neo": "✦  Futuristic"}[nxt],
-                   style="Side.TButton", command=lambda: self._set_theme(nxt)).pack(fill="x", pady=(2, 0))
         tk.Label(nav.bottom, text=f"Version {__version__}  ·  © {AUTHOR}", bg=CARD, fg=FAINT,
                  font=(FONT, 8), anchor="w").pack(fill="x", padx=12, pady=(10, 0))
         self.bulk_stop_flag = threading.Event()

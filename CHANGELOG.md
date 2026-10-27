@@ -1,5 +1,9 @@
 # GOLD Express - what's new
 
+## 2.15.1
+- **Updates, look and Settings are icons at the top right** (next to the status), like other apps -
+  hover for a tip. When a new version is ready, the update icon lights up with a dot.
+
 ## 2.15.0
 - **A new futuristic look** (now the default): deep-space background, glass tiles with glowing
   edges, neon wave cards, and glowing violet-to-blue buttons and menu. Prefer the old look?
