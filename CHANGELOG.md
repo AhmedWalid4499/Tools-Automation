@@ -1,5 +1,9 @@
 # GOLD Express - what's new
 
+## 2.14.2
+- Clearer update messages: when updates can't be checked, GOLD Express says so in plain words and
+  points to the GOLD Express download page.
+
 ## 2.14.1
 - **APMs only**: the DPM list holds the APM departments only (APM Europe = DPM Egypt, APM APAC =
   DPM India, APM AME = DPM Brazil) - still filled automatically for everyone. The CPM and other

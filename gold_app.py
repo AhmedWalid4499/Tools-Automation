@@ -447,7 +447,7 @@ class App(tk.Tk):
             b.state(["disabled"])
         self.configure(cursor="watch")
 
-    # ----- updates (GitHub Releases)
+    # ----- updates (published releases, checked in the background)
     def _check_updates(self, quiet=True):
         """quiet: background check at start-up - only lights the button up when there is an update."""
         if self.new_release and not quiet:
@@ -457,11 +457,13 @@ class App(tk.Tk):
             try:
                 rel, newer = gu.check()
             except Exception as e:
+                self.log(f"Update check failed: {str(e).splitlines()[0][:300] if str(e) else type(e).__name__}")
                 if not quiet:
-                    self.ui(lambda e=e: self._message(
+                    self.ui(lambda: self._message(
                         "Updates", "Could not check for updates",
-                        f"{str(e).splitlines()[0][:160]}\n\nYou can also download new versions from "
-                        f"{gu.RELEASES_PAGE}", icon=""))
+                        "The update server could not be reached from this network - check the Orange network "
+                        "or VPN and try again.\n\nYou can also get the newest version from the GOLD Express "
+                        f"download page:\n{gu.DOWNLOAD_PAGE}", icon=""))
                 return
             if newer:
                 self.new_release = rel
@@ -478,8 +480,7 @@ class App(tk.Tk):
             elif not quiet:
                 self.ui(lambda: self._message(
                     "Updates", "You're up to date",
-                    f"GOLD Express {__version__} is the newest version "
-                    f"(newest on GitHub: {rel['version'] if rel else '?'}).", icon=""))
+                    f"GOLD Express {__version__} is the newest version.", icon=""))
         threading.Thread(target=work, daemon=True).start()
 
     def _offer_update(self, rel):
@@ -496,8 +497,8 @@ class App(tk.Tk):
             return
         if not gu.can_self_update():
             self._message("Update available", f"Version {rel['version']} is available.",
-                          "This copy runs from the source code - update it with 'git pull'.\n\n"
-                          f"{gu.RELEASES_PAGE}", icon="")
+                          "This copy runs from the source code - update it with 'git pull', or install the "
+                          f"app from the download page:\n{gu.DOWNLOAD_PAGE}", icon="")
             return
         self._updating = True
         self._update_dialog(rel)

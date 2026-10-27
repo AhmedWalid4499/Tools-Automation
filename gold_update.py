@@ -20,7 +20,8 @@ from pathlib import Path
 from version import __version__
 
 REPO = "AhmedWalid4499/Tools-Automation"
-RELEASES_PAGE = f"https://github.com/{REPO}/releases"
+RELEASES_PAGE = f"https://github.com/{REPO}/releases"  # used in the background only - never shown to users
+DOWNLOAD_PAGE = "https://ahmedwalid4499.github.io/Tools-Automation/"  # the download website users are given
 HEADERS = {"User-Agent": f"GOLD-Express/{__version__}", "Accept": "application/vnd.github+json"}
 
 

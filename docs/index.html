@@ -146,7 +146,7 @@
         <p class="lead">GOLD Express is a friendly Windows app for GOLD order management. See your orders at a glance,
           track deliveries, update many orders at once and ask the GOLD bot anything - without clicking through GOLD page by page.</p>
         <div class="cta">
-          <a class="btn" id="download" href="https://github.com/AhmedWalid4499/Tools-Automation/releases/latest/download/GOLD_Express_Setup.exe">
+          <a class="btn dl" id="download" href="#install">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
             Download for Windows
           </a>
@@ -267,7 +267,7 @@
       <p class="sub">The latest version's release notes.</p>
       <div class="news" id="news">
         <h3>GOLD Express</h3>
-        <div class="when">See all versions on the <a href="https://github.com/AhmedWalid4499/Tools-Automation/releases">releases page</a>.</div>
+        <div class="when">The newest version is always the one you download here.</div>
       </div>
     </div>
   </section>
@@ -296,7 +296,7 @@
       <h2>Ready to try it?</h2>
       <p class="sub" style="margin: 0 auto;">Download GOLD Express and open your first order in a minute.</p>
       <div class="cta">
-        <a class="btn" href="https://github.com/AhmedWalid4499/Tools-Automation/releases/latest/download/GOLD_Express_Setup.exe">
+        <a class="btn dl" href="#install">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
           Download for Windows
         </a>
@@ -308,12 +308,17 @@
 <footer>
   <div class="wrap">
     <span>GOLD Express · created by Ahmed El-Bourgy · © 2026 Ahmed El-Bourgy. All rights reserved.</span>
-    <span><a href="https://github.com/AhmedWalid4499/Tools-Automation/releases">All versions</a></span>
+    <span><a href="#install">Install help</a></span>
   </div>
 </footer>
 
 <script>
-  // The newest version and its release notes, read from GitHub (the download link never changes)
+  // The newest version and its release notes, read in the background (the download link never changes)
+  // Download buttons: the installer is fetched on click (no file address shown when hovering)
+  var SETUP = "https://github.com/AhmedWalid4499/Tools-Automation/releases/latest/download/GOLD_Express_Setup.exe";
+  document.querySelectorAll("a.dl").forEach(function (a) {
+    a.addEventListener("click", function (e) { e.preventDefault(); window.location.href = SETUP; });
+  });
   (function () {
     var esc = function (s) { return s.replace(/[&<>"]/g, function (c) { return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); };
     var inline = function (s) { return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/"(.+?)"/g, "“$1”"); };
@@ -335,8 +340,7 @@
           else if (line.trim() && items.length) { items[items.length - 1] += " " + line.trim(); }
           else if (line.trim() && !items.length) { items.push(line.trim()); }
         });
-        var html = "<h3>Version " + esc(version) + "</h3><div class=\"when\">" + esc(when) +
-          " · <a href=\"" + esc(rel.html_url || "#") + "\">release page</a></div>";
+        var html = "<h3>Version " + esc(version) + "</h3><div class=\"when\">" + esc(when) + "</div>";
         if (items.length) html += "<ul>" + items.map(function (t) { return "<li>" + inline(t) + "</li>"; }).join("") + "</ul>";
         document.getElementById("news").innerHTML = html;
       })
