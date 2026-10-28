@@ -1,5 +1,12 @@
 # GOLD Express - what's new
 
+## 2.16.0
+- **Revised Target Date checks before updating GOLD:**
+  - If the order's current RTDD already has the date you chose, nothing is added and the row
+    says "Already set"; the end-of-run message lists those orders.
+  - A date in the past is flagged when you check or run. Before anything is saved, a pop-up asks
+    whether you agree to set it to that past date anyway: Yes sets it, No leaves those orders out.
+
 ## 2.15.1
 - **Updates, look and Settings are icons at the top right** (next to the status), like other apps -
   hover for a tip. When a new version is ready, the update icon lights up with a dot.

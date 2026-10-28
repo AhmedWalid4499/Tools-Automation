@@ -2653,6 +2653,11 @@ class App(tk.Tk):
                         self.ui(lambda iid=iid: grid.mark_done(iid))
                     results.append(row + ["OK", msg])
                     self.log(f"{row[0]}: {msg}")
+                except gm.AlreadySet as e:  # nothing to do in GOLD: a notice, not a failure
+                    self.ui(lambda: run.update(iid=None))
+                    set_status(iid, f"ℹ Already set - {e}", "run")
+                    results.append(row + ["ALREADY SET", str(e)])
+                    self.log(f"{row[0]}: {e}")
                 except Exception as e:
                     err = str(e).splitlines()[0] if str(e) else type(e).__name__
                     self.ui(lambda: run.update(iid=None))
@@ -2690,14 +2695,17 @@ class App(tk.Tk):
         def done(res):
             path, results = res
             ok = sum(1 for r in results if r[len(columns)] == "OK")
-            finish(f"{ok} of {len(results)} {'tested' if dry else 'done'}")
+            same = [r[0] for r in results if r[len(columns)] == "ALREADY SET"]
+            finish(f"{ok} of {len(results)} {'tested' if dry else 'done'}" + (f", {len(same)} already set" if same else ""))
             self.log(f"{label}: {ok} of {len(results)} OK. Results: {path or 'not saved'}")
+            note = (f"\n\n{len(same)} order(s) already had this date as their RTDD, so nothing was changed:\n    "
+                    + ", ".join(same[:8]) + (f" and {len(same) - 8} more" if len(same) > 8 else "")) if same else ""
             if not path:
                 messagebox.showinfo(APP_NAME, f"{ok} of {len(results)} order(s) {'tested' if dry else 'done'}."
-                                              "\n\nThe results file could not be saved - the Status column "
+                                              f"{note}\n\nThe results file could not be saved - the Status column "
                                               "shows each order's result.")
             elif messagebox.askyesno(APP_NAME, f"{ok} of {len(results)} order(s) "
-                                               f"{'tested' if dry else 'done'}.\n\nResults saved to\n{path}"
+                                               f"{'tested' if dry else 'done'}.{note}\n\nResults saved to\n{path}"
                                                "\n\nOpen it now?"):
                 os.startfile(path)
 
@@ -2790,7 +2798,10 @@ class App(tk.Tk):
                 if r["reason"] and reason != r["reason"]:
                     g.set_value(iid, "reason", reason)  # GOLD's exact wording
                 items.append((iid, (order, dt, reason), [order, gm.gold_date(dt), reason]))
-                g.set_status(iid, "Ready")
+                if dt < date.today():
+                    g.set_status(iid, "⚠ Past date - you will be asked before it is set", "run")
+                else:
+                    g.set_status(iid, "Ready")
             except ValueError as e:
                 bad += 1
                 g.set_status(iid, f"✗ {e}", "bad")
@@ -2812,6 +2823,21 @@ class App(tk.Tk):
         if bad and not messagebox.askyesno(APP_NAME, "Some rows have problems (shown in red) and will be "
                                                      "skipped.\nContinue with the others?"):
             return
+        past = [it for it in items if it[1][1] < date.today()]
+        if past:
+            shown = "\n".join(f"    {row[0]}  ->  {row[1]}" for _, _, row in past[:10])
+            if len(past) > 10:
+                shown += f"\n    ...and {len(past) - 10} more"
+            if not messagebox.askyesno(
+                    "Past date", f"This RTDD date is in the past (today is {gm.gold_date(date.today())}):\n\n{shown}"
+                                 "\n\nYou cannot normally set the RTDD to a past date.\n\n"
+                                 "Do you agree to set it to this past date anyway?\n\n"
+                                 "Yes - set it anyway\nNo - leave these orders out", icon="warning"):
+                for iid, _, _ in past:
+                    self.rtdd_grid.set_status(iid, "✗ Past date - not set", "bad")
+                items = [it for it in items if it not in past]
+                if not items:
+                    return
         kind, dry = self.rtdd_kind.get(), self.rtdd_dry.get()
         title = gm.RTDD_TITLES[kind]
         if not dry and not messagebox.askyesno(

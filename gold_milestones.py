@@ -240,6 +240,21 @@ def find_rtdd_rows(driver, wait, title):
     return out
 
 
+class AlreadySet(Exception):
+    """The order's current RTDD already has the chosen date: nothing was added."""
+
+
+def current_rtdd(driver, wait):
+    """The order's current RTDD row (either type): the last open one, else the last one. None if none."""
+    oo.open_tab(driver, wait, "Milestones")
+    rows = []
+    for g in gx.extract_tab(driver)["grids"]:
+        if "Title" in g["columns"] and "Target Date" in g["columns"]:
+            rows += [dict(zip(g["columns"], r)) for r in g["rows"]]
+    rtdds = [r for r in rows if r["Title"].startswith("Revised Target Date")]
+    return ([r for r in rtdds if not r.get("Completed Date")] or rtdds or [None])[-1]
+
+
 def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=print):
     """Open the order and add the RTDD milestone. Returns a short result message.
     dry_run: fill the form, then Cancel instead of Save."""
@@ -254,6 +269,10 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
     row = oo.search_order(driver, wait, order)
     oo.open_result(driver, wait, row, order)
     before = find_rtdd_rows(driver, wait, title)
+    current = current_rtdd(driver, wait)
+    if current and current.get("Target Date", "").strip().lower() == target.lower():
+        oo.open_orders_tab(driver, wait, discard_changes=True)
+        raise AlreadySet(f"the RTDD is already set to {target} - nothing changed")
 
     open_create_form(driver, wait)
     Select(driver.find_element(By.ID, "title")).select_by_visible_text(title)
