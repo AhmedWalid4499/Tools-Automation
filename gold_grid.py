@@ -27,7 +27,7 @@ class EditGrid(tk.Frame):
         self._suggest = None  # the name suggestions under a typeahead cell
         self.done = {}  # iid -> the row's values when it was saved in GOLD (see mark_done)
         self.failed = set()  # iids whose last run failed (for "Run failed tasks")
-        ttk.Style(self).configure("Grid.Treeview", rowheight=28)
+        ttk.Style(self).configure("Grid.Treeview", rowheight=int(28 * self.winfo_fpixels("1i") / 96))
         self.tree = ttk.Treeview(self, columns=self.all_keys, show="headings",
                                  selectmode="extended", style="Grid.Treeview")
         self.tree.heading("n", text="#", anchor="w")

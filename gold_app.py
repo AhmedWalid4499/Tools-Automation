@@ -336,8 +336,16 @@ class App(tk.Tk):
             if icon.exists():
                 self.iconbitmap(default=str(icon))
                 break
-        self.geometry("1240x800")
-        self.minsize(1040, 660)
+        # Sizes for 100% screen scaling, grown with it (fonts grow too); maximized if it does not fit.
+        s = self.winfo_fpixels("1i") / 96
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.minsize(min(int(1040 * s), sw - 80), min(int(660 * s), sh - 120))
+        w, h = int(1240 * s), int(800 * s)
+        if w > sw - 40 or h > sh - 80:
+            self.geometry(f"{sw - 80}x{sh - 120}+20+10")
+            self.state("zoomed")
+        else:
+            self.geometry(f"{w}x{h}")
         self.configure(background=CANVAS)
         self.settings = load_settings()
         moved_chats = move_old_chats()
@@ -875,14 +883,15 @@ class App(tk.Tk):
                      font=(FONT, 10, "bold"), borderwidth=0)
         st.map("TNotebook.Tab", background=[("selected", CARD)], foreground=[("selected", ORANGE)],
                expand=[("selected", (0, 0, 0, 0))])
-        # Tables
-        st.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=INK, rowheight=28,
+        # Tables (row heights in pixels: grown with the screen scaling, like the fonts)
+        s = self.winfo_fpixels("1i") / 96
+        st.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=INK, rowheight=int(28 * s),
                      borderwidth=0, font=(FONT, 10))
         st.map("Treeview", background=[("selected", ORANGE_SOFT)], foreground=[("selected", INK)])
         st.configure("Treeview.Heading", background="#F7F7F8", foreground=MUTED, relief="flat",
                      font=(FONT, 9, "bold"), padding=(8, 6), borderwidth=0)
         st.map("Treeview.Heading", background=[("active", "#EFEFF1")])
-        st.configure("Grid.Treeview", rowheight=28)
+        st.configure("Grid.Treeview", rowheight=int(28 * s))
         st.configure("TPanedwindow", background=CARD)
         st.configure("Sash", sashthickness=6, gripcount=0, background=CARD)
         st.configure("Vertical.TScrollbar", background="#E5E7EB", troughcolor=CARD, borderwidth=0,
@@ -890,7 +899,7 @@ class App(tk.Tk):
         st.configure("Horizontal.TScrollbar", background="#E5E7EB", troughcolor=CARD, borderwidth=0,
                      arrowsize=12)
         # Softer tables, rounded buttons and fields
-        st.configure("Treeview", rowheight=30, foreground=INK)
+        st.configure("Treeview", rowheight=int(30 * s), foreground=INK)
         st.configure("Treeview.Heading", background=gui.HEAD_BG, foreground=MUTED, padding=(8, 7))
         st.map("Treeview.Heading", background=[("active", gui.HEAD_ACTIVE)])
         gui.style_rounded(st, self)
@@ -1024,9 +1033,24 @@ class App(tk.Tk):
         return None
 
     def _asset_image(self, name):
+        """An image from assets/, e.g. logo_36.png: 36 px at 100% screen scaling. On a scaled screen it is
+        made from a bigger copy of the same picture (logo_64.png, logo.png), so it stays sharp."""
+        s = self.winfo_fpixels("1i") / 96
         for base in (BUNDLE_DIR / "assets", Path(__file__).parent / "assets"):
-            if (base / name).exists():
+            if not (base / name).exists():
+                continue
+            m = re.fullmatch(r"(.+)_(\d+)\.png", name)
+            if not m or s < 1.05:
                 return tk.PhotoImage(file=str(base / name), master=self)
+            want = round(int(m.group(2)) * s)
+            sizes = sorted(int(p.stem.rsplit("_", 1)[1]) for p in base.glob(f"{m.group(1)}_*.png")
+                           if p.stem.rsplit("_", 1)[1].isdigit())
+            src = next((base / f"{m.group(1)}_{n}.png" for n in sizes if n >= want), base / f"{m.group(1)}.png")
+            if not src.exists():
+                src = base / name
+            from PIL import Image, ImageTk
+            im = Image.open(src).convert("RGBA").resize((want, want), Image.LANCZOS)
+            return ImageTk.PhotoImage(im, master=self)
         return None
 
     def _toggle_log(self):
@@ -2576,7 +2600,8 @@ class App(tk.Tk):
     def _bulk_bar(self, f, dry_var, run_cmd, check_cmd):
         """run_cmd(only_failed=False); check_cmd(). Returns the Stop button (with .run_info)."""
         rb = tk.Frame(f, background=CARD, pady=8)
-        rb.pack(fill="x")
+        above = f.pack_slaves()  # packed first, at the bottom: the table shrinks, never the buttons
+        rb.pack(fill="x", side="bottom", **({"before": above[0]} if above else {}))
         ttk.Checkbutton(rb, text="Test only (no final save)", variable=dry_var).pack(side="left")
         stop = ttk.Button(rb, text="Stop", command=self._bulk_stop)
         stop.pack(side="right")
@@ -4799,6 +4824,7 @@ def ask_selftest(sharepoint=False):
 if __name__ == "__main__":
     import sys
     HERE.mkdir(parents=True, exist_ok=True)
+    gui.sharp_on_scaled_screens()  # before any window
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         selftest(sys.argv[2])
     elif len(sys.argv) >= 2 and sys.argv[1] == "--ui-selftest":

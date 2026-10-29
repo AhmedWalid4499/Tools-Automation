@@ -14,6 +14,20 @@ from PIL import Image, ImageDraw, ImageFilter, ImageTk
 FONT = "Segoe UI"
 ICONS = "Segoe Fluent Icons" if Path(r"C:\Windows\Fonts\SegoeIcons.ttf").exists() else "Segoe MDL2 Assets"
 
+
+def sharp_on_scaled_screens():
+    """Draw at the screen's real resolution. Without this, at 125% / 150% Windows scaling Windows
+    draws the window at 100% and stretches it - blurry, pixelated text and edges.
+    Call before the first window is created."""
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # per monitor: sharp on every screen
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()  # older Windows
+        except (AttributeError, OSError):
+            pass
+
 def _initial_theme():
     """'light' or 'dark', as saved in the settings (Settings > Appearance). Read here, before anything is
     drawn, because the colours below are used as defaults everywhere."""
@@ -874,6 +888,7 @@ class IconButton(tk.Canvas):
     a tooltip; set_highlight(True) makes it a glowing accent button with a dot (e.g. an update is ready)."""
 
     def __init__(self, parent, icon, command, tip="", bg=BG, size=38, font=None):
+        size = int(size * parent.winfo_fpixels("1i") / 96)  # size is for 100% screen scaling
         super().__init__(parent, width=size, height=size, background=bg, highlightthickness=0, borderwidth=0,
                          cursor="hand2")
         self.icon, self.command, self.size = icon, command, size

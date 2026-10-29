@@ -1,5 +1,12 @@
 # GOLD Express - what's new
 
+## 2.17.1
+- **Sharp on every screen.** On laptops set to 125% or 150% scaling, Windows used to stretch the
+  window, so text and edges looked blurry and pixelated. GOLD Express now draws at the screen's
+  full resolution. Table rows, the logo and the top icons grow with the scaling, and the window
+  opens maximized when it doesn't fit.
+- The Run update / Run failed tasks buttons always stay visible on smaller screens.
+
 ## 2.17.0
 - **Revised Target Date warns before an earlier date.** Each order's new RTDD is compared with
   its ITDD when it has no RTDD yet, or else with the later of its current RTDD and ITDD. If the new
