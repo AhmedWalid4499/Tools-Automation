@@ -1,5 +1,18 @@
 # GOLD Express - what's new
 
+## 2.18.0
+- **DPM dashboard (new page, under Order Assignment)** - KPIs for managers, from the same APM Open
+  Orders sheet: DPMs with orders, open orders, overdue, due in the next 30 days, orders per DPM and
+  average order age. A DPM scorecard (open, overdue, % overdue, due in 30 days, RTDD set, average
+  age) sorts by any column; rows are red when 30% or more of a DPM's orders are overdue, amber from
+  15%. Delivery status chart, and a By manager table: click a manager to see only their DPMs.
+  Filter by region, manager or name; double-click a DPM to see their orders; Excel export.
+- **Order Assignment: filter by manager.** A Manager filter next to STM (DPM), and the Orders per
+  STM list now shows each DPM's manager, has a find box (STM or manager) and sorts by any column
+  (click a heading).
+- Each DPM's manager comes from the Org Chart with the DPM list's weekly update (the first update
+  after installing brings them in). The Excel exports have a Manager column.
+
 ## 2.17.1
 - **Sharp on every screen.** On laptops set to 125% or 150% scaling, Windows used to stretch the
   window, so text and edges looked blurry and pixelated. GOLD Express now draws at the screen's

@@ -24,8 +24,8 @@ FONT = "Segoe UI"
 thin = Side(style="thin", color=LINE)
 
 ORDER_COLUMNS = [("Order", "order"), ("Status", "status"), ("Type", "type"), ("Customer", "customer"),
-                 ("End customer", "end_customer"), ("STM (DPM)", "dpm"), ("Assignment", "category"),
-                 ("Region", "region"), ("DPM team", "team"), ("Target date", "target"),
+                 ("End customer", "end_customer"), ("STM (DPM)", "dpm"), ("Manager", "manager"),
+                 ("Assignment", "category"), ("Region", "region"), ("DPM team", "team"), ("Target date", "target"),
                  ("Initial target date", "ittd"), ("Revised target date", "rtdd"), ("Days to due", "due_days"),
                  ("Backlog", "backlog"), ("Order age (days)", "age"), ("Cust. site ref", "site_ref"),
                  ("Country", "country"), ("Sales cluster", "cluster"), ("Service", "service"),
@@ -217,7 +217,7 @@ def export(path, orders, source_line="", filter_line=""):
 
     # top DPMs
     people = gas.per_person(orders)
-    top_dpms = [[n, cnt, od] for n, where, cnt, od in people if where != gas.NOT_IN_LIST][:15]
+    top_dpms = [[n, cnt, od] for n, where, cnt, od, _ in people if where != gas.NOT_IN_LIST][:15]
     r = c2 + 3
     d1, d2 = _table(ws, r, D, "Top 15 DPMs by orders", ["DPM", "Orders", "Overdue"], top_dpms)
     if top_dpms:
@@ -226,7 +226,7 @@ def export(path, orders, source_line="", filter_line=""):
              width=11.5)
 
     # people not in the DPM list
-    outsiders = [[n, cnt, od] for n, where, cnt, od in people if where == gas.NOT_IN_LIST][:15]
+    outsiders = [[n, cnt, od] for n, where, cnt, od, _ in people if where == gas.NOT_IN_LIST][:15]
     r = d2 + 3
     e1, e2 = _table(ws, r, D, "Top 15 STMs not in the DPM list", ["STM", "Orders", "Overdue"], outsiders)
     if outsiders:
@@ -293,10 +293,74 @@ def export(path, orders, source_line="", filter_line=""):
     sh.sheet_view.showGridLines = False
     sh["A1"] = "Orders per STM"
     sh["A1"].font = Font(name=FONT, size=14, bold=True, color=INK)
-    rows = [[n, where if where != gas.NOT_IN_LIST else "", "In DPM list" if where != gas.NOT_IN_LIST
-             else gas.NOT_IN_LIST, cnt, od] for n, where, cnt, od in people]
-    _table(sh, 3, 1, f"{len(rows)} people", ["STM", "Region", "DPM list", "Orders", "Overdue"], rows)
-    for col, w in zip("ABCDE", (32, 16, 18, 10, 10)):
+    rows = [[n, mgr, where if where != gas.NOT_IN_LIST else "", "In DPM list" if where != gas.NOT_IN_LIST
+             else gas.NOT_IN_LIST, cnt, od] for n, where, cnt, od, mgr in people]
+    _table(sh, 3, 1, f"{len(rows)} people", ["STM", "Manager", "Region", "DPM list", "Orders", "Overdue"], rows)
+    for col, w in zip("ABCDEF", (32, 28, 16, 18, 10, 10)):
+        sh.column_dimensions[col].width = w
+    sh.freeze_panes = "A5"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    return path
+
+
+def export_kpis(path, dpm_rows, manager_rows, source_line="", filter_line=""):
+    """The DPM dashboard (gold_assignments.dpm_kpis / manager_kpis rows): headline numbers, the DPM scorecard
+    and the managers' table."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "DPM scorecard"
+    ws.sheet_view.showGridLines = False
+    ws["B2"] = "DPM dashboard - APM open orders"
+    ws["B2"].font = Font(name=FONT, size=18, bold=True, color=INK)
+    ws["B3"] = "  ·  ".join(x for x in (source_line, filter_line,
+                                         f"exported {datetime.now():%d-%b-%Y %H:%M}") if x)
+    ws["B3"].font = Font(name=FONT, size=9, color=MUTED)
+    ws.row_dimensions[2].height = 30
+
+    n = sum(r["open"] for r in dpm_rows)
+    late = sum(r["overdue"] for r in dpm_rows)
+    soon = sum(r["due_soon"] for r in dpm_rows)
+    for i, (caption, value, sub, colour) in enumerate((
+            ("DPMs with orders", len(dpm_rows), f"{len(manager_rows)} managers", "8A3FB8"),
+            ("Open orders", n, f"{n / max(len(dpm_rows), 1):.1f} per DPM", "1F86E0"),
+            ("Overdue", late, f"{late * 100 / max(n, 1):.0f}% of the orders", "E5484D"),
+            ("Due in 30 days", soon, f"{soon * 100 / max(n, 1):.0f}% of the orders", "F59E0B"))):
+        _kpi(ws, 5, 2 + i * 3, caption, value, sub, colour)
+
+    columns = ["DPM", "Manager", "Region", "Open", "Overdue", "% overdue", "Due ≤ 30 days", "No target date",
+               "RTDD set", "Avg age (days)", "Oldest (days)"]
+    rows = [[r["dpm"], r["manager"], r["region"], r["open"], r["overdue"], r["overdue_pct"] / 100, r["due_soon"],
+             r["no_date"], r["revised"], r["avg_age"], r["oldest"]] for r in dpm_rows]
+    first, last = _table(ws, 9, 2, f"{len(rows)} DPMs", columns, rows)
+    for r in range(first, last + 1):
+        ws.cell(r, 7).number_format = "0%"
+        pct = ws.cell(r, 7).value or 0
+        if ws.cell(r, 6).value and pct >= 0.3:
+            ws.cell(r, 7).font = Font(name=FONT, size=9, bold=True, color="C62828")
+        elif ws.cell(r, 6).value and pct >= 0.15:
+            ws.cell(r, 7).font = Font(name=FONT, size=9, bold=True, color="A15C00")
+    for col, w in zip("BCDEFGHIJKL", (30, 28, 14, 9, 10, 11, 14, 15, 10, 14, 13)):
+        ws.column_dimensions[col].width = w
+    ws.freeze_panes = "C11"
+    top = sorted((r for r in dpm_rows if r["overdue"]), key=lambda r: -r["overdue"])[:15]
+    if top:  # the chart's numbers sit far to the right (AA:AB), out of the way
+        c1, c2 = _table(ws, 9, 27, "Most overdue", ["DPM", "Overdue"], [[r["dpm"], r["overdue"]] for r in top])
+        _bar(ws, "Most overdue DPMs", Reference(ws, min_col=27, min_row=c1, max_row=c2),
+             Reference(ws, min_col=28, min_row=c1 - 1, max_row=c2), "N9", colour="E5484D", height=9.5, width=14)
+
+    sh = wb.create_sheet("By manager")
+    sh.sheet_view.showGridLines = False
+    sh["A1"] = "DPMs' orders per manager"
+    sh["A1"].font = Font(name=FONT, size=14, bold=True, color=INK)
+    rows = [[m["manager"] or "(manager not known)", m["dpms"], m["open"], m["overdue"], m["overdue_pct"] / 100,
+             m["due_soon"]] for m in manager_rows]
+    first, last = _table(sh, 3, 1, f"{len(rows)} managers", ["Manager", "DPMs", "Open", "Overdue", "% overdue",
+                                                             "Due ≤ 30 days"], rows)
+    for r in range(first, last + 1):
+        sh.cell(r, 5).number_format = "0%"
+    for col, w in zip("ABCDEF", (32, 8, 9, 10, 11, 14)):
         sh.column_dimensions[col].width = w
     sh.freeze_panes = "A5"
 

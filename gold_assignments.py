@@ -156,7 +156,8 @@ def read(path):
 
 def classify(orders, dpm_names):
     """Add to each order: "dpm" (the DPM-list name, or the STM as written), "category" (ASSIGNED,
-    UNASSIGNED, NOT_IN_LIST), "team" (DPM Egypt...) and "region" (APM Europe...). Names are matched
+    UNASSIGNED, NOT_IN_LIST), "team" (DPM Egypt...), "region" (APM Europe...) and "manager" (the DPM's
+    manager, from the Org Chart). Names are matched
     ignoring spaces, hyphens, capitals and first/last order ("Salma El-Shazly" = "Salma Elshazly")."""
     index = {}
     for e in dpm_names:
@@ -167,7 +168,7 @@ def classify(orders, dpm_names):
         stm = (o.get("stm") or "").strip()
         o["target"] = o.get("rtdd") or o.get("ittd")
         if not stm:
-            o.update(dpm="", category=UNASSIGNED, team="", region="")
+            o.update(dpm="", category=UNASSIGNED, team="", region="", manager="")
             continue
         e = index.get(gn.letters(stm))
         if e is None:
@@ -176,11 +177,11 @@ def classify(orders, dpm_names):
                 e = index.get(gn.letters(" ".join(words[1:] + words[:1])))
         if e is None:
             o.update(dpm=" ".join(w.capitalize() if w.isupper() or w.islower() else w for w in stm.split()),
-                     category=NOT_IN_LIST, team="", region="")
+                     category=NOT_IN_LIST, team="", region="", manager="")
         else:
             team = e.get("team") or ""
             o.update(dpm=gn.full_name(e), category=ASSIGNED, team=team,
-                     region=REGIONS.get(team, team or NO_TEAM))
+                     region=REGIONS.get(team, team or NO_TEAM), manager=e.get("manager") or "")
     return orders
 
 
@@ -201,8 +202,8 @@ def is_overdue(o):
 
 
 def per_person(orders):
-    """[(name, region or category, number of orders, overdue)] for every STM, most orders first."""
-    count, overdue, where = {}, {}, {}
+    """[(name, region or category, number of orders, overdue, manager)] for every STM, most orders first."""
+    count, overdue, where, manager = {}, {}, {}, {}
     for o in orders:
         if o["category"] == UNASSIGNED:
             continue
@@ -210,7 +211,62 @@ def per_person(orders):
         count[k] = count.get(k, 0) + 1
         overdue[k] = overdue.get(k, 0) + (1 if is_overdue(o) else 0)
         where[k] = o["region"] if o["category"] == ASSIGNED else NOT_IN_LIST
-    return sorted(((k, where[k], count[k], overdue[k]) for k in count), key=lambda r: (-r[2], r[0].lower()))
+        manager[k] = o.get("manager") or ""
+    return sorted(((k, where[k], count[k], overdue[k], manager[k]) for k in count),
+                  key=lambda r: (-r[2], r[0].lower()))
+
+
+def _number(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def dpm_kpis(orders, soon=30):
+    """The DPM dashboard: one row per DPM (assigned orders only), most overdue first. Each row:
+    dpm, manager, region, open, overdue, overdue_pct, due_soon (due in 0..soon days), no_date, revised
+    (has a Revised Target Delivery Date), avg_age and oldest (order age in days, None when unknown)."""
+    rows = {}
+    for o in orders:
+        if o["category"] != ASSIGNED:
+            continue
+        r = rows.setdefault(o["dpm"], {"dpm": o["dpm"], "manager": o.get("manager") or "", "region": o["region"],
+                                       "open": 0, "overdue": 0, "due_soon": 0, "no_date": 0, "revised": 0,
+                                       "_ages": []})
+        r["open"] += 1
+        late = is_overdue(o)
+        d = _number(o.get("due_days"))
+        r["overdue"] += late
+        r["due_soon"] += not late and d is not None and 0 <= d <= soon
+        r["no_date"] += not o.get("target")
+        r["revised"] += bool(o.get("rtdd"))
+        age = _number(o.get("age"))
+        if age is not None:
+            r["_ages"].append(age)
+    out = []
+    for r in rows.values():
+        ages = r.pop("_ages")
+        r["overdue_pct"] = round(100 * r["overdue"] / r["open"]) if r["open"] else 0
+        r["avg_age"] = round(sum(ages) / len(ages)) if ages else None
+        r["oldest"] = round(max(ages)) if ages else None
+        out.append(r)
+    return sorted(out, key=lambda r: (-r["overdue"], -r["open"], r["dpm"].lower()))
+
+
+def manager_kpis(dpm_rows):
+    """dpm_kpis() rows added up per manager: [{manager, dpms, open, overdue, overdue_pct, due_soon}],
+    most open orders first. DPMs whose manager is not known come under ""."""
+    by = {}
+    for r in dpm_rows:
+        m = by.setdefault(r["manager"], {"manager": r["manager"], "dpms": 0, "open": 0, "overdue": 0,
+                                         "due_soon": 0})
+        m["dpms"] += 1
+        for k in ("open", "overdue", "due_soon"):
+            m[k] += r[k]
+    for m in by.values():
+        m["overdue_pct"] = round(100 * m["overdue"] / m["open"]) if m["open"] else 0
+    return sorted(by.values(), key=lambda m: (-m["open"], m["manager"].lower()))
 
 
 def fmt_date(d):

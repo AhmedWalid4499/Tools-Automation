@@ -97,6 +97,16 @@ def same_person_name(a, b):
         or (len(wb) > 1 and letters(a) == letters(" ".join(wb[-1:] + wb[:-1])))
 
 
+def _cap(words):
+    return " ".join("-".join(p.capitalize() if p.isupper() else p for p in w.split("-")) for w in words if w)
+
+
+def nice_name(display):
+    """An Org Chart display name, first name first: 'Maria Julia BENVENUTI' -> 'Maria Julia Benvenuti'."""
+    words = str(display or "").split()
+    return _cap([w for w in words if not w.isupper()] + [w for w in words if w.isupper()])
+
+
 def from_org_chart(rec, team):
     """An Org Chart record -> a list entry. Display names are 'Maria Julia BENVENUTI' (last name in capitals)."""
     words = str(rec.get("display_name") or "").split()
@@ -104,13 +114,13 @@ def from_org_chart(rec, team):
     last = [w for w in words if w.isupper()]
     if not first or not last:  # no capitals to go by: the legal names
         first, last = [rec.get("legalFirstName", "")], [rec.get("legalLastName", "")]
-    cap = lambda ws: " ".join("-".join(p.capitalize() if p.isupper() else p for p in w.split("-")) for w in ws if w)
-    return {"first": cap(first), "last": cap(last),
-            "team": team, "email": (rec.get("email") or "").strip().lower()}
+    return {"first": _cap(first), "last": _cap(last), "team": team,
+            "email": (rec.get("email") or "").strip().lower(), "manager": nice_name(rec.get("supr_display_name"))}
 
 
 def merge_team(names, people):
-    """Add Org Chart people (from_org_chart entries) to the list, or set the team of names already in it
+    """Add Org Chart people (from_org_chart entries) to the list, or set the team and manager of names
+    already in it
     (same email, or the same letters in either name order). Returns (added, updated)."""
     added = updated = 0
     for p in people:
@@ -120,10 +130,13 @@ def merge_team(names, people):
             next((e for e in names if letters(e["first"] + e["last"]) in keys
                   and not (p["email"] and e.get("email") and e["email"] != p["email"])), None)
         if hit:
-            if hit.get("team") != p["team"] or (p["email"] and not hit.get("email")):
+            if hit.get("team") != p["team"] or (p["email"] and not hit.get("email")) \
+                    or (p.get("manager") and hit.get("manager") != p["manager"]):
                 hit["team"] = p["team"]
                 if p["email"]:
                     hit["email"] = p["email"]
+                if p.get("manager"):
+                    hit["manager"] = p["manager"]
                 updated += 1
         else:
             names.append(dict(p))

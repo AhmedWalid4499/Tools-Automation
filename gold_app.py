@@ -986,7 +986,7 @@ class App(tk.Tk):
             return tk.Frame(content_host, background=BG)
 
         my, overview, explorer, ask = page(), page(), page(), page(False)
-        rtdd, assign, oa = page(), page(), page()
+        rtdd, assign, oa, kpi = page(), page(), page(), page()
         org, names = page(False), page()
         self.org_frame, self.explorer_frame, self.overview_frame = org, explorer, overview
         self.my_frame, self.oa_frame = my, oa
@@ -994,6 +994,8 @@ class App(tk.Tk):
         nav.add(my, "My Orders", "", "Your orders in GOLD (My orders only) at a glance")
         nav.add(oa, "Order Assignment", "",
                 "Which DPM has which APM order - from the APM Open Orders sheet (refreshed daily)")
+        nav.add(kpi, "DPM dashboard", "\uF246",
+                "DPM KPIs for managers - workload, overdue and upcoming orders per DPM and per manager")
         nav.add(overview, "Overview", "", "Key facts and delivery status of your orders")
         nav.add(explorer, "Order explorer", "", "Open an order, browse its tabs, export and download")
         nav.add(ask, "GOLD bot", "", "The Friendly GOLD bot - ask about deadlines, pricing, sites and people")
@@ -1009,6 +1011,7 @@ class App(tk.Tk):
         self.bulk_stop_flag = threading.Event()
         self._build_my_tab(my)
         self._build_oa_tab(oa)
+        self._build_kpi_tab(kpi)
         self._build_overview_tab(overview)
         self._build_explorer(explorer)
         self._build_rtdd_tab(rtdd)
@@ -1021,9 +1024,10 @@ class App(tk.Tk):
     def _page_changed(self, title, subtitle):
         self.page_title.configure(text=title)
         self.page_sub.configure(text=subtitle)
-        if title in ("DPM names", "Bulk assignment", "Order Assignment") and hasattr(self, "names_tree"):
+        if title in ("DPM names", "Bulk assignment", "Order Assignment", "DPM dashboard") \
+                and hasattr(self, "names_tree"):
             self.after(300, self._dpm_auto_sync)  # every department's DPMs, for every user
-        if title == "Order Assignment" and hasattr(self, "oa_tree"):
+        if title in ("Order Assignment", "DPM dashboard") and hasattr(self, "oa_tree"):
             self.after(50, self._oa_shown)
 
     def _asset_path(self, name):
@@ -1655,10 +1659,14 @@ class App(tk.Tk):
                   ("due_days", "Days to due", 80), ("site_ref", "Cust. site ref", 110), ("country", "Country", 100))
     OA_SHOWS = (("all", "All"), (gas.ASSIGNED, "Assigned"), (gas.UNASSIGNED, "Unassigned"),
                 (gas.NOT_IN_LIST, "Not in DPM list"))
+    OA_PEOPLE_COLUMNS = (("name", "Name", 125, "w"), ("manager", "Manager", 110, "w"), ("n", "Orders", 52, "e"),
+                         ("late", "Late", 40, "e"))
+    ALL_MANAGERS = "All managers"
 
     def _build_oa_tab(self, f):
         self.oa_orders, self.oa_time, self.oa_loading = [], None, False
         self.oa_sort = ("target", False)
+        self.oa_people_sort = ("n", True)  # Orders per STM: most orders first
 
         kpi = tk.Frame(f, background=BG)
         kpi.pack(fill="x", padx=6, pady=(2, 8))
@@ -1678,8 +1686,8 @@ class App(tk.Tk):
         lower = tk.Frame(f, background=BG)
         lower.pack(fill="both", expand=True)
         lower.rowconfigure(0, weight=1)
-        lower.columnconfigure(0, weight=3, uniform="oalower")
-        lower.columnconfigure(1, weight=1, uniform="oalower")
+        lower.columnconfigure(0, weight=5, uniform="oalower")
+        lower.columnconfigure(1, weight=2, uniform="oalower")
         scale = self.winfo_fpixels("1i") / 96
 
         # The orders (left)
@@ -1708,12 +1716,12 @@ class App(tk.Tk):
         filt.pack(fill="x", pady=(0, 8))
         ttk.Label(filt, text="Region", style="Muted.TLabel").pack(side="left", padx=(2, 6))
         self.oa_region = tk.StringVar(value="All regions")
-        self.oa_region_cb = ttk.Combobox(filt, textvariable=self.oa_region, state="readonly", width=16)
+        self.oa_region_cb = ttk.Combobox(filt, textvariable=self.oa_region, state="readonly", width=13)
         self.oa_region_cb.pack(side="left")
         self.oa_region_cb.bind("<<ComboboxSelected>>", lambda e: self._oa_filter(region=self.oa_region.get(), dpm=""))
         ttk.Label(filt, text="STM (DPM)", style="Muted.TLabel").pack(side="left", padx=(14, 6))
         self.oa_dpm = tk.StringVar()
-        self.oa_dpm_cb = ttk.Combobox(filt, textvariable=self.oa_dpm, width=26)
+        self.oa_dpm_cb = ttk.Combobox(filt, textvariable=self.oa_dpm, width=20)
         self.oa_dpm_cb.pack(side="left")
 
         def dpm_typed(e):
@@ -1730,8 +1738,14 @@ class App(tk.Tk):
             self._oa_fill()
         self.oa_dpm_cb.bind("<KeyRelease>", dpm_typed)
         self.oa_dpm_cb.bind("<<ComboboxSelected>>", lambda e: self._oa_fill())
+        ttk.Label(filt, text="Manager", style="Muted.TLabel").pack(side="left", padx=(14, 6))
+        self.oa_manager = tk.StringVar(value=self.ALL_MANAGERS)
+        self.oa_manager_cb = ttk.Combobox(filt, textvariable=self.oa_manager, state="readonly", width=18)
+        self.oa_manager_cb.pack(side="left")
+        self.oa_manager_cb.bind("<<ComboboxSelected>>", lambda e: self._oa_filter(dpm=""))
         self.oa_chip = gui.Pill(filt, "", ORANGE_DARK, ORANGE_SOFT, bg=CARD,
-                                command=lambda: self._oa_filter(show="all", region="All regions", dpm=""))
+                                command=lambda: self._oa_filter(show="all", region="All regions", dpm="",
+                                                                manager=self.ALL_MANAGERS))
 
         # Where the data comes from (click: open the sheet in the browser)
         self.oa_source = tk.Label(tt.body, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w", cursor="hand2")
@@ -1745,7 +1759,8 @@ class App(tk.Tk):
         self.oa_tree_copy = gui.TableCopy(self.oa_tree, self.log, menu=False)
         for c, t, w in self.OA_COLUMNS:
             self.oa_tree.heading(c, text=t, anchor="w", command=lambda c=c: self._oa_sort_by(c))
-            self.oa_tree.column(c, width=int(w * scale), minwidth=int(60 * scale), anchor="w", stretch=True)
+            self.oa_tree.column(c, width=int(w * scale), minwidth=int(60 * scale), anchor="w",
+                                stretch=c != "order")  # the order number keeps its width
         self.oa_tree.tag_configure(gas.UNASSIGNED, foreground=RED)
         self.oa_tree.tag_configure(gas.NOT_IN_LIST, foreground=ORANGE_DARK)
         self.oa_tree.tag_configure("odd", background=gui.ZEBRA)
@@ -1769,12 +1784,22 @@ class App(tk.Tk):
         pt = self._tile(lower)
         pt.grid(row=0, column=1, sticky="nsew")
         self._tile_head(pt.body, "Orders per STM", "")
+        find = tk.Frame(pt.body, background=CARD)
+        find.pack(fill="x", pady=(0, 8))
+        tk.Label(find, text="", bg=CARD, fg=ORANGE, font=(gui.ICONS, 12)).pack(side="left", padx=(2, 6))
+        self.oa_people_q = tk.StringVar()
+        pent = ttk.Entry(find, textvariable=self.oa_people_q)
+        pent.pack(side="left", fill="x", expand=True)
+        pent.bind("<KeyRelease>", lambda e: self._oa_fill_people())
+        gui.Tooltip(pent, "Find an STM or a manager (part of the name is enough)")
         pf = tk.Frame(pt.body, background=CARD)
         pf.pack(fill="both", expand=True)
-        self.oa_people = ttk.Treeview(pf, columns=("name", "where", "n"), show="headings", selectmode="browse")
-        for c, t, w, anchor in (("name", "Name", 140, "w"), ("where", "Region", 90, "w"), ("n", "Orders", 55, "e")):
-            self.oa_people.heading(c, text=t, anchor=anchor)
-            self.oa_people.column(c, width=int(w * scale), anchor=anchor, stretch=c != "n")
+        self.oa_people = ttk.Treeview(pf, columns=[c for c, *_ in self.OA_PEOPLE_COLUMNS], show="headings",
+                                      selectmode="browse")
+        for c, t, w, anchor in self.OA_PEOPLE_COLUMNS:
+            self.oa_people.heading(c, text=t, anchor=anchor, command=lambda c=c: self._oa_people_sort_by(c))
+            self.oa_people.column(c, width=int(w * scale), minwidth=int((80 if anchor == "w" else 38) * scale),
+                                  anchor=anchor, stretch=c in ("name", "manager"))
         self.oa_people.tag_configure(gas.NOT_IN_LIST, foreground=ORANGE_DARK)
         self.oa_people.tag_configure("odd", background=gui.ZEBRA)
         psb = ttk.Scrollbar(pf, orient="vertical", command=self.oa_people.yview)
@@ -1783,8 +1808,9 @@ class App(tk.Tk):
         self.oa_people.pack(side="left", fill="both", expand=True)
         self.oa_people.bind("<<TreeviewSelect>>", lambda e: self._oa_person_picked())
         self.oa_people_note = tk.Label(pt.body, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w",
-                                       justify="left", wraplength=int(260 * scale))
+                                       justify="left")
         self.oa_people_note.pack(fill="x", pady=(6, 0))
+        self.oa_people_note.bind("<Configure>", lambda e: e.widget.configure(wraplength=max(e.width - 4, 50)))
         self._oa_render()
 
     # --- loading: live from the sheet's SharePoint link. Each time the tab is opened (checked at most every
@@ -1886,16 +1912,19 @@ class App(tk.Tk):
             self._oa_render()
 
     # --- filters and drawing
-    def _oa_filter(self, show=None, region=None, dpm=None):
+    def _oa_filter(self, show=None, region=None, dpm=None, manager=None):
         if show is not None:
             self.oa_show.set(show)
         if region is not None:
             self.oa_region.set(region)
         if dpm is not None:
             self.oa_dpm.set(dpm)
+        if manager is not None:
+            self.oa_manager.set(manager)
         if self.oa_show.get() == gas.UNASSIGNED:
             self.oa_region.set("All regions")
             self.oa_dpm.set("")
+            self.oa_manager.set(self.ALL_MANAGERS)
         self._oa_fill()
 
     def _oa_regions(self):
@@ -1903,21 +1932,24 @@ class App(tk.Tk):
         order = [r for r in gn.TEAMS if r in found] + sorted(found - set(gn.TEAMS))
         return ["All regions"] + order
 
+    def _oa_managers(self):
+        return [self.ALL_MANAGERS] + sorted({o["manager"] for o in self.oa_orders if o.get("manager")}, key=str.lower)
+
+    def _oa_in_scope(self, o):
+        """Does an order fit the Show / Region / Manager filters (the STM and search boxes aside)?"""
+        show, region, manager = self.oa_show.get(), self.oa_region.get(), self.oa_manager.get()
+        return ((show == "all" or o["category"] == show) and (region == "All regions" or o["region"] == region)
+                and (manager == self.ALL_MANAGERS or o.get("manager") == manager))
+
     def _oa_people(self):
-        region, show = self.oa_region.get(), self.oa_show.get()
-        names = {o["dpm"] for o in self.oa_orders if o["dpm"]
-                 and (show == "all" or o["category"] == show)
-                 and (region == "All regions" or o["region"] == region)}
+        names = {o["dpm"] for o in self.oa_orders if o["dpm"] and self._oa_in_scope(o)}
         return sorted(names, key=str.lower)
 
     def _oa_rows(self):
-        show, region = self.oa_show.get(), self.oa_region.get()
         dpm, q = self.oa_dpm.get().strip(), self.oa_search.get().strip().lower()
         out = []
         for o in self.oa_orders:
-            if show != "all" and o["category"] != show:
-                continue
-            if region != "All regions" and o["region"] != region:
+            if not self._oa_in_scope(o):
                 continue
             if dpm and o["dpm"] != dpm and not gn.matches(o["dpm"], dpm):
                 continue
@@ -1961,7 +1993,10 @@ class App(tk.Tk):
         self.oa_cards["not_in_list"].set(n(s["not_in_list"]), f"{s['outsiders']} people" if loaded else "")
         self.oa_cards["dpms"].set(n(s["dpms"]), f"of {len(self.dpm_names)} in the DPM list" if loaded else "")
         self.oa_region_cb.configure(values=self._oa_regions())
+        self.oa_manager_cb.configure(values=self._oa_managers())
         self._oa_fill()
+        if hasattr(self, "kpi_tree"):
+            self._kpi_render()
 
     def _oa_fill(self):
         rows = self._oa_rows()
@@ -1978,7 +2013,8 @@ class App(tk.Tk):
         self.oa_dpm_cb.configure(values=self._oa_people())
         parts = [p for p in (dict(self.OA_SHOWS).get(self.oa_show.get()) if self.oa_show.get() != "all" else "",
                              self.oa_region.get() if self.oa_region.get() != "All regions" else "",
-                             self.oa_dpm.get().strip()) if p]
+                             f"manager {self.oa_manager.get()}" if self.oa_manager.get() != self.ALL_MANAGERS
+                             else "", self.oa_dpm.get().strip()) if p]
         if parts:
             self.oa_chip.set("  ·  ".join(parts) + "   ✕")
             self.oa_chip.pack(side="left", padx=(12, 0))
@@ -1988,20 +2024,36 @@ class App(tk.Tk):
         self._oa_fill_people()
 
     def _oa_fill_people(self):
-        region, show = self.oa_region.get(), self.oa_show.get()
-        orders = [o for o in self.oa_orders if (region == "All regions" or o["region"] == region)
-                  and (show == "all" or o["category"] == show)]
+        orders = [o for o in self.oa_orders if self._oa_in_scope(o)]
         p = self.oa_people
         p.delete(*p.get_children())
-        people = gas.per_person(orders)
-        for i, (name, where, count, _) in enumerate(people):
-            tags = ([gas.NOT_IN_LIST] if where == gas.NOT_IN_LIST else []) + (["odd"] if i % 2 else [])
-            p.insert("", "end", iid=name, values=(name, "not in list" if where == gas.NOT_IN_LIST else where, count),
-                     tags=tags)
+        q = self.oa_people_q.get().strip()
+        people = [r for r in gas.per_person(orders) if not q or gn.matches(r[0], q) or gn.matches(r[4], q)]
+        col, rev = self.oa_people_sort
+        i = [c for c, *_ in self.OA_PEOPLE_COLUMNS].index(col)
+        pick = (lambda r: r[0], lambda r: r[4], lambda r: r[2], lambda r: r[3])[i]
+        people.sort(key=lambda r: r[0].lower())  # ties: by name
+        people.sort(key=lambda r: (str(pick(r)).lower() if i < 2 else pick(r)), reverse=rev)
+        if i == 1:  # people without a known manager last
+            people.sort(key=lambda r: not pick(r))
+        for c, t, _, _ in self.OA_PEOPLE_COLUMNS:
+            p.heading(c, text=t + (" ▼" if rev else " ▲") * (c == col))
+        selected = self.oa_dpm.get()
+        for n, (name, where, count, late, manager) in enumerate(people):
+            tags = ([gas.NOT_IN_LIST] if where == gas.NOT_IN_LIST else []) + (["odd"] if n % 2 else [])
+            p.insert("", "end", iid=name, tags=tags, values=(name, manager or "-", count, late or ""))
+        if selected and p.exists(selected):
+            p.selection_set(selected)
         un = sum(1 for o in orders if o["category"] == gas.UNASSIGNED)
         self.oa_people_note.configure(
-            text=(f"{len(people)} people  ·  {un} orders without an STM\nOrange names are not in the DPM list - "
-                  "add them in DPM names if they are DPMs.") if self.oa_time else "")
+            text=(f"{len(people)} people  ·  {un} orders without an STM  ·  click a heading to sort.  "
+                  "Orange names are not in the DPM list - add them in DPM names if they are DPMs.")
+            if self.oa_time else "")
+
+    def _oa_people_sort_by(self, col):
+        key, rev = self.oa_people_sort
+        self.oa_people_sort = (col, not rev if key == col else col in ("n", "late"))  # numbers: biggest first
+        self._oa_fill_people()
 
     def _oa_person_picked(self):
         sel = self.oa_people.selection()
@@ -2081,6 +2133,306 @@ class App(tk.Tk):
             if messagebox.askyesno(APP_NAME, f"Dashboard with {len(rows):,} orders saved to\n{path}\n\nOpen it now?"):
                 os.startfile(path)
         threading.Thread(target=work, daemon=True).start()
+
+    # ----- DPM dashboard: KPIs per DPM and per manager, from the Order Assignment orders (assigned ones)
+    # (region, orders without a target date and the oldest order are in the Excel export and the charts)
+    KPI_COLUMNS = (("dpm", "DPM", 150, "w"), ("manager", "Manager", 130, "w"), ("open", "Open", 48, "e"),
+                   ("overdue", "Overdue", 64, "e"), ("overdue_pct", "% overdue", 76, "e"),
+                   ("due_soon", "Due ≤ 30 d", 74, "e"), ("revised", "RTDD set", 66, "e"),
+                   ("avg_age", "Avg age (d)", 80, "e"))
+    KPI_LATE_RED, KPI_LATE_AMBER = 30, 15  # % overdue that colours a DPM's row red / amber
+
+    def _build_kpi_tab(self, f):
+        self.kpi_sort = ("overdue", True)
+        scale = self.winfo_fpixels("1i") / 96
+
+        bar = tk.Frame(f, background=BG)
+        bar.pack(fill="x", padx=6, pady=(2, 8))
+        ttk.Label(bar, text="Region", style="Muted.TLabel").pack(side="left", padx=(0, 6))
+        self.kpi_region = tk.StringVar(value="All regions")
+        self.kpi_region_cb = ttk.Combobox(bar, textvariable=self.kpi_region, state="readonly", width=16)
+        self.kpi_region_cb.pack(side="left")
+        self.kpi_region_cb.bind("<<ComboboxSelected>>", lambda e: self._kpi_render())
+        ttk.Label(bar, text="Manager", style="Muted.TLabel").pack(side="left", padx=(14, 6))
+        self.kpi_manager = tk.StringVar(value=self.ALL_MANAGERS)
+        self.kpi_manager_cb = ttk.Combobox(bar, textvariable=self.kpi_manager, state="readonly", width=24)
+        self.kpi_manager_cb.pack(side="left")
+        self.kpi_manager_cb.bind("<<ComboboxSelected>>", lambda e: self._kpi_render())
+        ttk.Label(bar, text="Find a DPM", style="Muted.TLabel").pack(side="left", padx=(14, 6))
+        self.kpi_q = tk.StringVar()
+        ent = ttk.Entry(bar, textvariable=self.kpi_q, width=14)
+        ent.pack(side="left")
+        ent.bind("<KeyRelease>", lambda e: self._kpi_render())
+        self.kpi_chip = gui.Pill(bar, "", ORANGE_DARK, ORANGE_SOFT, bg=BG, command=self._kpi_clear)
+        ttk.Button(bar, text="⤓  Excel", style="Small.TButton", command=self._kpi_export).pack(side="right")
+        self._btn(bar, "↻  Refresh", lambda: self._oa_load(force=True), "Small.TButton").pack(side="right", padx=6)
+        self.kpi_info = tk.Label(bar, text="", bg=BG, fg=MUTED, font=(FONT, 9))
+        self.kpi_info.pack(side="right", padx=6)
+
+        cards = tk.Frame(f, background=BG)
+        cards.pack(fill="x", padx=6, pady=(0, 8))
+        self.kpi_cards = {}
+        for col, (key, caption, icon, palette, sort) in enumerate((
+                ("dpms", "DPMs with orders", "\uE716", "v_purple", "dpm"),
+                ("open", "Open orders", "\uE8A5", "v_blue", "open"),
+                ("overdue", "Overdue", "\uE7BA", "v_rose", "overdue"),
+                ("due_soon", "Due in 30 days", "\uE787", "v_orange", "due_soon"),
+                ("per_dpm", "Orders per DPM", "\uE9D2", "v_teal", "open"),
+                ("age", "Average order age", "\uE823", "v_green", "avg_age"))):
+            card = gui.StatCard(cards, caption, icon, palette, sub_lines=1, big_size=15,
+                                command=lambda k=sort: self._kpi_sort_by(k, biggest_first=True))
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
+            cards.columnconfigure(col, weight=1, uniform="kpicards")
+            self.kpi_cards[key] = card
+
+        lower = tk.Frame(f, background=BG)
+        lower.pack(fill="both", expand=True)
+        lower.rowconfigure(0, weight=1)
+        lower.columnconfigure(0, weight=5, uniform="kpilower")
+        lower.columnconfigure(1, weight=2, uniform="kpilower")
+
+        # The scorecard (left): one row per DPM
+        tt = self._tile(lower)
+        tt.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        head = self._tile_head(tt.body, "DPM scorecard", "\uE9F9")
+        tk.Label(head, text="click a heading to sort  ·  double-click a DPM to see their orders", bg=CARD, fg=FAINT,
+                 font=(FONT, 8)).pack(side="right")
+        tf = tk.Frame(tt.body, background=CARD)
+        tf.pack(fill="both", expand=True)
+        self.kpi_tree = ttk.Treeview(tf, columns=[c for c, *_ in self.KPI_COLUMNS], show="headings",
+                                     selectmode="extended")
+        self.kpi_tree_copy = gui.TableCopy(self.kpi_tree, self.log)
+        for c, t, w, anchor in self.KPI_COLUMNS:
+            self.kpi_tree.heading(c, text=t, anchor=anchor, command=lambda c=c: self._kpi_sort_by(c))
+            self.kpi_tree.column(c, width=int(w * scale), minwidth=int((100 if anchor == "w" else 40) * scale),
+                                 anchor=anchor, stretch=c in ("dpm", "manager"))
+        self.kpi_tree.tag_configure("red", foreground=RED)
+        self.kpi_tree.tag_configure("amber", foreground=gui.AMBER_FG)
+        self.kpi_tree.tag_configure("odd", background=gui.ZEBRA)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.kpi_tree.yview)
+        self.kpi_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.kpi_tree.pack(side="left", fill="both", expand=True)
+        self.kpi_tree.bind("<Double-1>", lambda e: self._kpi_open_dpm())
+        self.kpi_note = tk.Label(tt.body, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w", justify="left")
+        self.kpi_note.pack(fill="x", pady=(6, 0))
+        self.kpi_empty = tk.Frame(tf, background=CARD)
+        tk.Label(self.kpi_empty, text="\uF246", bg=CARD, fg=ORANGE, font=(gui.ICONS, 26)).pack(pady=(0, 6))
+        tk.Label(self.kpi_empty, text="DPM KPIs", bg=CARD, fg=INK, font=(FONT, 12, "bold")).pack()
+        tk.Label(self.kpi_empty, text="Built from the APM Open Orders sheet on SharePoint (refreshed every day).",
+                 bg=CARD, fg=MUTED, font=(FONT, 9)).pack(pady=(2, 10))
+        self._btn(self.kpi_empty, "↓  Get the latest orders", lambda: self._oa_load(force=True),
+                  "Accent.TButton").pack()
+
+        # Right: delivery status of the orders + the managers' teams
+        side = tk.Frame(lower, background=BG)
+        side.grid(row=0, column=1, sticky="nsew")
+        t1 = self._tile(side, fill="x")
+        self._tile_head(t1.body, "Delivery status", "\uEB05")
+        row = tk.Frame(t1.body, background=CARD)
+        row.pack(fill="x")
+        self.kpi_donut = gui.Donut(row)
+        self.kpi_donut.pack(side="left", padx=(0, 14))
+        self.kpi_legend = tk.Frame(row, background=CARD)
+        self.kpi_legend.pack(side="left", fill="x", expand=True)
+
+        t2 = self._tile(side, fill="both", expand=True, pady=(12, 0))
+        self._tile_head(t2.body, "By manager", "\uE716")
+        mf = tk.Frame(t2.body, background=CARD)
+        mf.pack(fill="both", expand=True)
+        self.kpi_mgr = ttk.Treeview(mf, columns=("manager", "dpms", "open", "late"), show="headings",
+                                    selectmode="browse")
+        for c, t, w, anchor in (("manager", "Manager", 130, "w"), ("dpms", "DPMs", 44, "e"),
+                                ("open", "Orders", 54, "e"), ("late", "% late", 56, "e")):
+            self.kpi_mgr.heading(c, text=t, anchor=anchor)
+            self.kpi_mgr.column(c, width=int(w * scale), minwidth=int(40 * scale), anchor=anchor,
+                                stretch=c == "manager")
+        self.kpi_mgr.tag_configure("red", foreground=RED)
+        self.kpi_mgr.tag_configure("amber", foreground=gui.AMBER_FG)
+        self.kpi_mgr.tag_configure("odd", background=gui.ZEBRA)
+        msb = ttk.Scrollbar(mf, orient="vertical", command=self.kpi_mgr.yview)
+        self.kpi_mgr.configure(yscrollcommand=msb.set)
+        msb.pack(side="right", fill="y")
+        self.kpi_mgr.pack(side="left", fill="both", expand=True)
+        self.kpi_mgr.bind("<<TreeviewSelect>>", lambda e: self._kpi_manager_picked())
+        tk.Label(t2.body, text="Click a manager to see only their DPMs", bg=CARD, fg=FAINT,
+                 font=(FONT, 8), anchor="w").pack(fill="x", pady=(6, 0))
+        self._kpi_render()
+
+    def _kpi_orders(self):
+        """The assigned orders in the Region / Manager filters."""
+        region, manager = self.kpi_region.get(), self.kpi_manager.get()
+        return [o for o in self.oa_orders if o["category"] == gas.ASSIGNED
+                and (region == "All regions" or o["region"] == region)
+                and (manager == self.ALL_MANAGERS or o.get("manager") == manager)]
+
+    def _kpi_rows(self, rows):
+        q = self.kpi_q.get().strip()
+        rows = [r for r in rows if not q or gn.matches(r["dpm"], q) or gn.matches(r["manager"], q)]
+        key, rev = self.kpi_sort
+        rows.sort(key=lambda r: r["dpm"].lower())  # ties: by name
+        if key in ("dpm", "manager", "region"):
+            rows.sort(key=lambda r: (str(r[key]) == "", str(r[key]).lower()), reverse=rev)
+        else:
+            rows.sort(key=lambda r: -1 if r[key] is None else r[key], reverse=rev)
+        return rows
+
+    def _kpi_sort_by(self, col, biggest_first=False):
+        key, rev = self.kpi_sort
+        if biggest_first:
+            self.kpi_sort = (col, col not in ("dpm", "manager", "region"))
+        else:
+            self.kpi_sort = (col, not rev if key == col else col not in ("dpm", "manager", "region"))
+        self._kpi_render()
+
+    def _kpi_render(self):
+        loaded = bool(self.oa_time)
+        if loaded:
+            self.kpi_empty.place_forget()
+        else:
+            self.kpi_empty.place(relx=0.5, rely=0.45, anchor="center")
+        self.kpi_region_cb.configure(values=self._oa_regions())
+        managers = [self.ALL_MANAGERS] + sorted({o["manager"] for o in self.oa_orders if o.get("manager")},
+                                                key=str.lower)
+        self.kpi_manager_cb.configure(values=managers)
+        if self.kpi_manager.get() not in managers:
+            self.kpi_manager.set(self.ALL_MANAGERS)
+        orders = self._kpi_orders()
+        dpm_rows = gas.dpm_kpis(orders)
+        q = self.kpi_q.get().strip()
+        if q:  # Find a DPM: the cards and charts follow it too
+            dpm_rows = [r for r in dpm_rows if gn.matches(r["dpm"], q) or gn.matches(r["manager"], q)]
+            names = {r["dpm"] for r in dpm_rows}
+            orders = [o for o in orders if o["dpm"] in names]
+
+        # cards
+        n = len(orders)
+        late = sum(r["overdue"] for r in dpm_rows)
+        soon = sum(r["due_soon"] for r in dpm_rows)
+        ages = [r["avg_age"] for r in dpm_rows for _ in range(r["open"]) if r["avg_age"] is not None]
+        oldest = max((r["oldest"] for r in dpm_rows if r["oldest"] is not None), default=None)
+        busiest = max(dpm_rows, key=lambda r: r["open"], default=None)
+        show = (lambda v: str(v)) if loaded else (lambda v: "-")
+        self.kpi_cards["dpms"].set(show(len(dpm_rows)), f"{len({r['manager'] for r in dpm_rows if r['manager']})} "
+                                                       "managers" if loaded else "not loaded yet")
+        self.kpi_cards["open"].set(show(n), "assigned to DPMs" if loaded else "")
+        self.kpi_cards["overdue"].set(show(late), f"{late * 100 // max(n, 1)}% of the orders" if loaded else "")
+        self.kpi_cards["due_soon"].set(show(soon), f"{soon * 100 // max(n, 1)}% of the orders" if loaded else "")
+        self.kpi_cards["per_dpm"].set(show(round(n / len(dpm_rows), 1) if dpm_rows else 0),
+                                      f"most: {busiest['open']} ({busiest['dpm'].split()[0]})"
+                                      if loaded and busiest else "")
+        self.kpi_cards["age"].set(f"{round(sum(ages) / len(ages))} d" if ages else show("-"),
+                                  f"oldest order {oldest} days" if oldest is not None else "")
+
+        # delivery status
+        later = sum(1 for o in orders if o.get("target") and not gas.is_overdue(o)) - soon
+        no_date = sum(r["no_date"] for r in dpm_rows)
+        items = [("Overdue", late, RED), ("Next 30 days", soon, gui.AMBER_FG),
+                 ("Later", max(later, 0), GREEN), ("No date", no_date, gui.GREY_FG)]
+        self.kpi_donut.set(items, show(n), "orders")
+        for w in self.kpi_legend.winfo_children():
+            w.destroy()
+        for k, v, colour in items:
+            r = tk.Frame(self.kpi_legend, background=CARD)
+            r.pack(fill="x", pady=1)
+            tk.Label(r, text="●", bg=CARD, fg=colour, font=(FONT, 11)).pack(side="left")
+            tk.Label(r, text=f"{v}  ·  {v * 100 // max(n, 1)}%", bg=CARD, fg=MUTED,
+                     font=(FONT, 9, "bold")).pack(side="right")
+            tk.Label(r, text=k, bg=CARD, fg=INK, font=(FONT, 9), anchor="w").pack(side="left", padx=(4, 10),
+                                                                                  fill="x", expand=True)
+
+        # by manager (all the DPMs in the Region filter, so another manager can be picked)
+        region = self.kpi_region.get()
+        everyone = gas.dpm_kpis([o for o in self.oa_orders if o["category"] == gas.ASSIGNED
+                                 and (region == "All regions" or o["region"] == region)])
+        m = self.kpi_mgr
+        m.delete(*m.get_children())
+        for i, r in enumerate(gas.manager_kpis(everyone)):
+            tags = [self._kpi_level(r["overdue_pct"], r["overdue"])] + (["odd"] if i % 2 else [])
+            m.insert("", "end", iid=r["manager"] or "-", tags=[t for t in tags if t], values=(
+                r["manager"] or "(not known)", r["dpms"], r["open"], f"{r['overdue_pct']}%"))
+        if self.kpi_manager.get() != self.ALL_MANAGERS and m.exists(self.kpi_manager.get()):
+            m.selection_set(self.kpi_manager.get())
+
+        # the scorecard
+        t = self.kpi_tree
+        t.delete(*t.get_children())
+        rows = self._kpi_rows(dpm_rows)
+        key, rev = self.kpi_sort
+        for c, title, *_ in self.KPI_COLUMNS:
+            t.heading(c, text=title + (" ▼" if rev else " ▲") * (c == key))
+        for i, r in enumerate(rows):
+            tags = [self._kpi_level(r["overdue_pct"], r["overdue"])] + (["odd"] if i % 2 else [])
+            t.insert("", "end", iid=r["dpm"], tags=[x for x in tags if x], values=(
+                r["dpm"], r["manager"] or "-", r["open"], r["overdue"] or "", f"{r['overdue_pct']}%",
+                r["due_soon"] or "", r["revised"] or "", "" if r["avg_age"] is None else r["avg_age"]))
+        parts = [p for p in (region if region != "All regions" else "",
+                             f"manager {self.kpi_manager.get()}" if self.kpi_manager.get() != self.ALL_MANAGERS
+                             else "", f"“{q}”" if q else "") if p]
+        if parts:
+            self.kpi_chip.set("  ·  ".join(parts) + "   ✕")
+            self.kpi_chip.pack(side="left", padx=(12, 0))
+        else:
+            self.kpi_chip.pack_forget()
+        when = datetime.fromtimestamp(self.oa_time).strftime("%d-%b %H:%M") if loaded else ""
+        self.kpi_info.configure(text=f"{len(rows)} DPMs  ·  {when}" if loaded else "")
+        self.kpi_note.configure(text=(
+            f"Red: {self.KPI_LATE_RED}% or more of a DPM's orders are overdue, amber: {self.KPI_LATE_AMBER}% or "
+            "more.  Overdue = past the target date (RTDD, else ITDD).  Manager: from the Org Chart.")
+            if loaded else "")
+
+    def _kpi_level(self, pct, overdue):
+        if overdue and pct >= self.KPI_LATE_RED:
+            return "red"
+        if overdue and pct >= self.KPI_LATE_AMBER:
+            return "amber"
+        return ""
+
+    def _kpi_clear(self):
+        self.kpi_region.set("All regions")
+        self.kpi_manager.set(self.ALL_MANAGERS)
+        self.kpi_q.set("")
+        self._kpi_render()
+
+    def _kpi_manager_picked(self):
+        sel = self.kpi_mgr.selection()
+        if sel and sel[0] != "-" and sel[0] != self.kpi_manager.get():
+            self.kpi_manager.set(sel[0])
+            self._kpi_render()
+
+    def _kpi_open_dpm(self):
+        """Double-click: the DPM's orders in Order Assignment."""
+        sel = self.kpi_tree.selection()
+        if not sel:
+            return
+        self.oa_search.set("")
+        self._oa_filter(show="all", region="All regions", dpm=sel[0], manager=self.ALL_MANAGERS)
+        self.notebook.select(self.oa_frame)
+
+    def _kpi_export(self):
+        """The scorecard and the managers' table (current filters) as an Excel workbook."""
+        if not self.oa_time:
+            return
+        import gold_assign_dashboard as gad
+        dpm_rows = self._kpi_rows(gas.dpm_kpis(self._kpi_orders()))
+        if not dpm_rows:
+            return
+        path = Path(self._ctx()["workbook"]).parent / f"DPM_dashboard_{datetime.now():%Y-%m-%d_%H%M%S}.xlsx"
+        source = (f"{gas.file_name(self._oa_link())}, refreshed on SharePoint "
+                  f"{datetime.fromtimestamp(self.oa_time):%d-%b-%Y %H:%M}")
+        parts = [p for p in (self.kpi_region.get() if self.kpi_region.get() != "All regions" else "",
+                             f"manager {self.kpi_manager.get()}" if self.kpi_manager.get() != self.ALL_MANAGERS
+                             else "", f"search “{self.kpi_q.get().strip()}”" if self.kpi_q.get().strip() else "")
+                 if p]
+        try:
+            gad.export_kpis(path, dpm_rows, gas.manager_kpis(dpm_rows), source,
+                            ("Filter: " + ", ".join(parts)) if parts else "All DPMs")
+        except PermissionError:
+            messagebox.showerror(APP_NAME, f"{path.name} is open in Excel. Close it and try again.")
+            return
+        self.log(f"DPM dashboard saved: {path}")
+        if messagebox.askyesno(APP_NAME, f"DPM dashboard ({len(dpm_rows)} DPMs) saved to\n{path}\n\nOpen it now?"):
+            os.startfile(path)
 
     def _tile_head(self, parent, title, icon):
         """A tile's title row (icon + bold title); returns the row so buttons can go on its right."""
@@ -3258,7 +3610,7 @@ class App(tk.Tk):
                 self.settings["assign_teams"] = [t for t in self.settings.get("assign_teams") or []
                                                  if t not in dropped_teams] or None
             added, updated = gn.merge_team(self.dpm_names, people)
-            self.settings.update(dpm_synced=time.time(), dpm_synced_departments=wanted)
+            self.settings.update(dpm_synced=time.time(), dpm_synced_departments=wanted, dpm_managers=True)
             save_settings(self.settings)
             self._names_saved()
             teams = Counter(p["team"] for p in people)
@@ -3282,6 +3634,7 @@ class App(tk.Tk):
         changed, or when the last sync is DPM_SYNC_DAYS old."""
         s = self.settings
         return (not s.get("dpm_synced") or s.get("dpm_synced_departments") != self._dpm_departments()
+                or not s.get("dpm_managers")
                 or time.time() - s["dpm_synced"] > self.DPM_SYNC_DAYS * 86400)
 
     def _dpm_auto_sync(self, tries=0):
