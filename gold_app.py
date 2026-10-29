@@ -2574,6 +2574,7 @@ class App(tk.Tk):
         self.log(f"Loaded {n} row(s) from {Path(path).name}")
 
     def _bulk_bar(self, f, dry_var, run_cmd, check_cmd):
+        """run_cmd(only_failed=False); check_cmd(). Returns the Stop button (with .run_info)."""
         rb = tk.Frame(f, background=CARD, pady=8)
         rb.pack(fill="x")
         ttk.Checkbutton(rb, text="Test only (no final save)", variable=dry_var).pack(side="left")
@@ -2581,6 +2582,7 @@ class App(tk.Tk):
         stop.pack(side="right")
         stop.state(["disabled"])
         self._btn(rb, "Run update", run_cmd, "Accent.TButton").pack(side="right", padx=6)
+        self._btn(rb, "Run failed tasks", lambda: run_cmd(only_failed=True)).pack(side="right", padx=(0, 6))
         self._btn(rb, "Check", check_cmd).pack(side="right")
         # Run status (shown while a run is going, in the same row): clock, which order, progress
         info = tk.Frame(rb, background=CARD)
@@ -2603,6 +2605,7 @@ class App(tk.Tk):
         Writes <sheet>_<date>.xlsx with columns + Result + Details."""
         ctx = self._ctx()
         self.bulk_stop_flag.clear()
+        grid.failed -= {iid for iid, _, _ in items}  # these rows get a new result now
         stop_btn.state(["!disabled"])
         w = self.worker
         # A running clock so the user sees it is working: total time, current order and its time
@@ -2658,10 +2661,16 @@ class App(tk.Tk):
                     set_status(iid, f"ℹ Already set - {e}", "run")
                     results.append(row + ["ALREADY SET", str(e)])
                     self.log(f"{row[0]}: {e}")
+                except gm.EarlierDate as e:  # the user chose not to set it: not a failure to re-run
+                    self.ui(lambda: run.update(iid=None))
+                    set_status(iid, f"✗ Not set - {e}", "bad")
+                    results.append(row + ["NOT SET", str(e)])
+                    self.log(f"{row[0]}: not set - {e}")
                 except Exception as e:
                     err = str(e).splitlines()[0] if str(e) else type(e).__name__
                     self.ui(lambda: run.update(iid=None))
                     set_status(iid, f"✗ {err}", "bad")
+                    grid.failed.add(iid)  # for "Run failed tasks"
                     results.append(row + ["FAILED", err])
                     self.log(f"{row[0]}: FAILED - {err}")
                     try:  # back to a clean search page for the next order
@@ -2698,8 +2707,17 @@ class App(tk.Tk):
             same = [r[0] for r in results if r[len(columns)] == "ALREADY SET"]
             finish(f"{ok} of {len(results)} {'tested' if dry else 'done'}" + (f", {len(same)} already set" if same else ""))
             self.log(f"{label}: {ok} of {len(results)} OK. Results: {path or 'not saved'}")
+            def listed(orders):
+                return ", ".join(orders[:8]) + (f" and {len(orders) - 8} more" if len(orders) > 8 else "")
+            not_set = [r[0] for r in results if r[len(columns)] == "NOT SET"]
+            failed = [r[0] for r in results if r[len(columns)] == "FAILED"]
             note = (f"\n\n{len(same)} order(s) already had this date as their RTDD, so nothing was changed:\n    "
-                    + ", ".join(same[:8]) + (f" and {len(same) - 8} more" if len(same) > 8 else "")) if same else ""
+                    f"{listed(same)}") if same else ""
+            if not_set:
+                note += f"\n\n{len(not_set)} order(s) not set (earlier date, you chose No):\n    {listed(not_set)}"
+            if failed:
+                note += f"\n\n{len(failed)} order(s) failed - use \"Run failed tasks\" to try them again:\n    " \
+                        f"{listed(failed)}"
             if not path:
                 messagebox.showinfo(APP_NAME, f"{ok} of {len(results)} order(s) {'tested' if dry else 'done'}."
                                               f"{note}\n\nThe results file could not be saved - the Status column "
@@ -2764,8 +2782,9 @@ class App(tk.Tk):
         if self.rtdd_reason.get() not in reasons:
             self.rtdd_reason.set("")
 
-    def _rtdd_check(self):
-        """Validate the table; mark Ready or the problem. Returns ([(iid, item, row)], n_bad) or None."""
+    def _rtdd_check(self, only=None):
+        """Validate the table (or only the rows in `only`); mark Ready or the problem.
+        Returns ([(iid, item, row)], n_bad) or None."""
         g = self.rtdd_grid
         g.close_editor(True)
         kind = self.rtdd_kind.get()
@@ -2779,6 +2798,9 @@ class App(tk.Tk):
         items, seen, bad = [], set(), 0
         g.skipped = 0
         for iid, r in g.filled():
+            if only is not None and iid not in only:  # keep its result; still counts for duplicates
+                seen.add(r["order"])
+                continue
             if g.is_done(iid, r):  # already saved in GOLD in this session: never add it twice
                 g.skipped += 1
                 g.set_status(iid, "✓ Already done - skipped (change the row to run it again)", "ok")
@@ -2808,10 +2830,63 @@ class App(tk.Tk):
         self.log(f"Revised Target Date check: {len(items)} ready" + (f", {bad} with problems" if bad else ""))
         return items, bad
 
-    def _rtdd_run(self):
+    def _failed_rows(self, grid):
+        """For "Run failed tasks": the failed rows of the last run, or None (after saying so)."""
+        failed = {iid for iid in grid.failed if grid.tree.exists(iid)}
+        if not failed:
+            messagebox.showinfo(APP_NAME, "No failed tasks to run again - the last run had no failures.")
+            return None
+        return failed
+
+    def _ask_from_worker(self, ask):
+        """Run ask() (a dialog) on the UI thread and wait for its answer; None if the run is stopped."""
+        box, answered = {}, threading.Event()
+
+        def show():
+            try:
+                box["v"] = ask()
+            finally:
+                answered.set()
+        self.ui(show)
+        while not answered.wait(0.5):
+            if self.bulk_stop_flag.is_set():
+                return None
+        return box.get("v")
+
+    def _earlier_date_dialog(self, order, warning, choice):
+        """Ask whether to set an RTDD earlier than the order's date. Returns True to set it.
+        'Set all' / 'Skip all' answer for the rest of the run (choice['all'])."""
+        win, body = self._dialog("Earlier date", width=500)
+        self._dialog_head(body, f"Earlier RTDD for {order}",
+                          f"The new RTDD {warning}.\n\nDo you still want to set this earlier date?", "",
+                          badge="Warning")
+        answer = {"v": False}
+
+        def pick(v, all_=False):
+            answer["v"] = v
+            if all_:
+                choice["all"] = v
+            win.destroy()
+        row = tk.Frame(body, background=CARD)
+        row.pack(fill="x", pady=(16, 0))
+        ttk.Button(row, text="Set it", style="Accent.TButton", command=lambda: pick(True)).pack(side="right")
+        ttk.Button(row, text="Don't set it", command=lambda: pick(False)).pack(side="right", padx=(0, 8))
+        ttk.Button(row, text="Set all", command=lambda: pick(True, True)).pack(side="left")
+        ttk.Button(row, text="Skip all", command=lambda: pick(False, True)).pack(side="left", padx=(8, 0))
+        win.protocol("WM_DELETE_WINDOW", lambda: pick(False))
+        win.bind("<Escape>", lambda e: pick(False))
+        self._place_dialog(win)
+        win.grab_set()
+        self.wait_window(win)
+        return answer["v"]
+
+    def _rtdd_run(self, only_failed=False):
         if self.busy:
             return
-        checked = self._rtdd_check()
+        only = self._failed_rows(self.rtdd_grid) if only_failed else None
+        if only_failed and only is None:
+            return
+        checked = self._rtdd_check(only)
         if not checked:
             return
         items, bad = checked
@@ -2844,8 +2919,14 @@ class App(tk.Tk):
                 "Confirm GOLD update", f"Add the milestone\n\n    {title}\n\nto {len(items)} order(s) in GOLD, "
                                        "each with its Date (and Reason, where given)?\n\nThis saves in GOLD."):
             return
+        choice = {}  # 'Set all' / 'Skip all' for earlier dates, for this run
+
+        def confirm(order, warning):
+            if "all" in choice:
+                return choice["all"]
+            return bool(self._ask_from_worker(lambda: self._earlier_date_dialog(order, warning, choice)))
         self._bulk_run(self.rtdd_grid, self.rtdd_stop_btn, items, "Revised Target Date",
-                       lambda d, w, it: gm.add_rtdd(d, w, it[0], kind, it[1], it[2], dry_run=dry),
+                       lambda d, w, it: gm.add_rtdd(d, w, it[0], kind, it[1], it[2], dry_run=dry, confirm=confirm),
                        ["Gold order", "Date", "Reason"], "RTDD update", title, dry)
 
     # ----- Bulk Order Assignment tab
@@ -2945,13 +3026,16 @@ class App(tk.Tk):
             self.settings["assign_teams"] = ticked
             save_settings(self.settings)
 
-    def _assign_check(self):
+    def _assign_check(self, only=None):
         g = self.assign_grid
         g.close_editor(True)
         default = self.assign_default.get().strip()
         items, seen, bad = [], set(), 0
         g.skipped = 0
         for iid, r in g.filled():
+            if only is not None and iid not in only:  # keep its result; still counts for duplicates
+                seen.add(r["order"])
+                continue
             if g.is_done(iid, r):  # already saved in GOLD in this session
                 g.skipped += 1
                 g.set_status(iid, "✓ Already done - skipped (change the row to run it again)", "ok")
@@ -2980,10 +3064,13 @@ class App(tk.Tk):
         self.log(f"Bulk Order Assignment check: {len(items)} ready" + (f", {bad} with problems" if bad else ""))
         return items, bad
 
-    def _assign_run(self):
+    def _assign_run(self, only_failed=False):
         if self.busy:
             return
-        items, bad = self._assign_check()
+        only = self._failed_rows(self.assign_grid) if only_failed else None
+        if only_failed and only is None:
+            return
+        items, bad = self._assign_check(only)
         if not items:
             messagebox.showinfo(APP_NAME, "Every row was already done in GOLD (✓) - nothing to run again."
                                 if self.assign_grid.skipped else

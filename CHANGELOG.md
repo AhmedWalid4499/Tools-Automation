@@ -1,5 +1,14 @@
 # GOLD Express - what's new
 
+## 2.17.0
+- **Revised Target Date warns before an earlier date.** Each order's new RTDD is compared with
+  its ITDD when it has no RTDD yet, or else with the later of its current RTDD and ITDD. If the new
+  date is earlier, you're asked first: Set it / Don't set it, or Set all / Skip all for the rest of
+  the run. Orders you don't set show "Not set". In Test only runs the warning is shown in the row.
+- **"Run failed tasks"** in Revised Target Date and Bulk Order Assignment runs only the orders
+  that failed in the last run; the other rows keep their results. The end-of-run message lists
+  the failed orders.
+
 ## 2.16.0
 - **Revised Target Date checks before updating GOLD:**
   - If the order's current RTDD already has the date you chose, nothing is added and the row

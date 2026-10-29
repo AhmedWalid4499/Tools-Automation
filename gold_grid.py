@@ -26,6 +26,7 @@ class EditGrid(tk.Frame):
         self._editor = None
         self._suggest = None  # the name suggestions under a typeahead cell
         self.done = {}  # iid -> the row's values when it was saved in GOLD (see mark_done)
+        self.failed = set()  # iids whose last run failed (for "Run failed tasks")
         ttk.Style(self).configure("Grid.Treeview", rowheight=28)
         self.tree = ttk.Treeview(self, columns=self.all_keys, show="headings",
                                  selectmode="extended", style="Grid.Treeview")
@@ -152,6 +153,7 @@ class EditGrid(tk.Frame):
         self.close_editor(False)
         self.tree.delete(*self.rows())
         self.done.clear()
+        self.failed.clear()
         self.add_rows(start_rows)
 
     def delete_selected(self):

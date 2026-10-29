@@ -244,20 +244,53 @@ class AlreadySet(Exception):
     """The order's current RTDD already has the chosen date: nothing was added."""
 
 
-def current_rtdd(driver, wait):
-    """The order's current RTDD row (either type): the last open one, else the last one. None if none."""
+class EarlierDate(Exception):
+    """The new RTDD is earlier than the order's date and the user chose not to set it."""
+
+
+def _date(text):
+    try:
+        return parse_date(text) if text else None
+    except ValueError:
+        return None
+
+
+def milestone_rows(driver, wait):
+    """All rows of the open order's Milestones tab: [{Title, Target Date, Completed Date, ...}]."""
     oo.open_tab(driver, wait, "Milestones")
     rows = []
     for g in gx.extract_tab(driver)["grids"]:
         if "Title" in g["columns"] and "Target Date" in g["columns"]:
             rows += [dict(zip(g["columns"], r)) for r in g["rows"]]
+    return rows
+
+
+def current_rtdd(rows):
+    """The order's current RTDD row (either type): the last open one, else the last one. None if none."""
     rtdds = [r for r in rows if r["Title"].startswith("Revised Target Date")]
     return ([r for r in rtdds if not r.get("Completed Date")] or rtdds or [None])[-1]
 
 
-def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=print):
+def compare_date(driver, wait, rows):
+    """(date, what it is) a new RTDD is compared with: the ITDD when the order has no RTDD, else the
+    later of the current RTDD and the ITDD. (None, '') when GOLD shows neither."""
+    initial = _date(next((r.get("Target Date") for r in rows
+                          if r["Title"].startswith("Initial Target Delivery Date")), ""))
+    if not initial:  # no ITDD milestone: the order's Information tab has the field
+        oo.open_tab(driver, wait, "Information")
+        initial = next((_date(v) for _, label, v in gx.extract_tab(driver)["fields"]
+                        if label.strip().lower() == "initial target delivery date" and _date(v)), None)
+    cur = current_rtdd(rows)
+    revised = _date(cur.get("Target Date")) if cur else None
+    found = [(d, what) for d, what in ((revised, "the current RTDD"), (initial, "the ITDD")) if d]
+    return max(found, key=lambda f: f[0]) if found else (None, "")
+
+
+def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=print, confirm=None):
     """Open the order and add the RTDD milestone. Returns a short result message.
-    dry_run: fill the form, then Cancel instead of Save."""
+    dry_run: fill the form, then Cancel instead of Save.
+    confirm(order, warning) -> bool is asked when the new date is earlier than the order's date
+    (see compare_date); without it, or on False, nothing is set (EarlierDate)."""
     title = RTDD_TITLES[kind]
     target = gold_date(new_date)
 
@@ -268,11 +301,17 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
     oo.untick_my_orders(driver)
     row = oo.search_order(driver, wait, order)
     oo.open_result(driver, wait, row, order)
-    before = find_rtdd_rows(driver, wait, title)
-    current = current_rtdd(driver, wait)
+    rows = milestone_rows(driver, wait)
+    current = current_rtdd(rows)
     if current and current.get("Target Date", "").strip().lower() == target.lower():
         oo.open_orders_tab(driver, wait, discard_changes=True)
         raise AlreadySet(f"the RTDD is already set to {target} - nothing changed")
+    ref, what = compare_date(driver, wait, rows)
+    warning = f"{target} is earlier than {what} ({gold_date(ref)})" if ref and new_date < ref else ""
+    if warning and not dry_run and not (confirm and confirm(order, warning)):
+        oo.open_orders_tab(driver, wait, discard_changes=True)
+        raise EarlierDate(f"{warning} - not set")
+    before = find_rtdd_rows(driver, wait, title)
 
     open_create_form(driver, wait)
     Select(driver.find_element(By.ID, "title")).select_by_visible_text(title)
@@ -297,7 +336,8 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
         wait.until(EC.invisibility_of_element_located((By.ID, "title")))
         # Filling the date marks the order as modified; leave it, discarding nothing saved.
         oo.open_orders_tab(driver, wait, discard_changes=True)
-        return f"dry run OK - form filled with {title} / {target}, then cancelled"
+        return (f"dry run OK - form filled with {title} / {target}, then cancelled"
+                + (f" (warning: {warning} - a real run asks first)" if warning else ""))
 
     form = driver.find_element(By.ID, "title")
     driver.find_element(By.CSS_SELECTOR, "img.butAddToOrder").click()
