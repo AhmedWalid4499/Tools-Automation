@@ -7,9 +7,10 @@ assigned to a DPM (with their region, e.g. APM Europe), unassigned (no STM), or 
 is not in the DPM list.
 """
 import base64
+import re
 import time
 from contextlib import suppress
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -38,9 +39,11 @@ COLUMNS = {"order": "Order Number", "status": "Order Status", "type": "Order Typ
            "stm": "STM Name", "signed": "Customer Signature Date", "ittd": "Initial Target Delivery Date",
            "rtdd": "Revised Target Delivery Date", "rtdd_reason": "Reason - Revised Target Delivery Date",
            "project": "Project Name", "age": "Order Age_BO", "due_days": "Days to Due Date_BO",
-           "backlog": "Backlog_BO", "site_ref": "Customer Site Reference"}
+           "backlog": "Backlog_BO", "site_ref": "Customer Site Reference", "revenue": "Total Revenue"}
 
 ASSIGNED, UNASSIGNED, NOT_IN_LIST = "Assigned", "Unassigned", "Not in DPM list"
+OVERDUE, DUE_14, NOT_OVERDUE, NO_DATE = "Overdue RTDD", "Overdue in 14 days", "Not Overdue", "No date"  # the sheet's
+NO_RTDD, RTDD_PASSED = "No RTDD set", "RTDD date passed"  # what an overdue order needs   # Backlog column
 NO_TEAM = "No team"  # a DPM-list name without a team (add it in DPM names > Edit, or import the teams)
 REGIONS = {team: dept for dept, team in gn.TEAMS.items()}  # "DPM Egypt" -> "APM Europe"
 
@@ -193,12 +196,58 @@ def summary(orders):
             "outsiders": len({o["dpm"] for o in orders if o["category"] == NOT_IN_LIST})}
 
 
+def _number(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def days_left(o):
+    """Days to the target date: the sheet's 'Days to Due Date', which is empty for an order with an RTDD but
+    no initial date (then worked out from the RTDD). None without any date."""
+    d = _number(o.get("due_days"))
+    if d is not None:
+        return int(d)
+    t = o.get("target")
+    return (t - date.today()).days if isinstance(t, date) else None
+
+
+def rtdd_status(o):
+    """OVERDUE, DUE_14, NOT_OVERDUE or NO_DATE: the sheet's Backlog column, else from the days to the target date."""
+    backlog = str(o.get("backlog") or "").strip().lower()
+    for status in (OVERDUE, DUE_14, NOT_OVERDUE):
+        if backlog == status.lower():
+            return status
+    d = days_left(o)
+    return NO_DATE if d is None else OVERDUE if d < 0 else DUE_14 if d <= 14 else NOT_OVERDUE
+
+
 def is_overdue(o):
-    """Past its target date: 'Days to Due Date' below 0 (else the sheet's Backlog says 'Overdue RTDD')."""
-    d = o.get("due_days")
-    if isinstance(d, (int, float)):
-        return d < 0
-    return str(o.get("backlog") or "").strip().lower().startswith("overdue rtdd")
+    return rtdd_status(o) == OVERDUE
+
+
+def rtdd_action(o):
+    """What an overdue order needs from its DPM: NO_RTDD (never revised) or RTDD_PASSED (revised, and that date
+    has passed too). "" for the others."""
+    return "" if not is_overdue(o) else RTDD_PASSED if o.get("rtdd") else NO_RTDD
+
+
+def rtdd_reason(o):
+    """The sheet's reason text as (whose reason, the date on it): '13-Jul-2026 Customer Reason' ->
+    ("Customer", date(2026, 7, 13)). ("", None) without a reason."""
+    text = str(o.get("rtdd_reason") or "")
+    if not text:
+        return "", None
+    low = text.lower()
+    who = ("Customer" if "customer reason" in low else "Orange" if "orange business" in low
+           else "MHS" if "mhs" in low else "Other")
+    when = None
+    m = re.match(r"\s*(\d{2}-[A-Za-z]{3}-\d{4})", text)
+    if m:
+        with suppress(ValueError):
+            when = datetime.strptime(m[1], "%d-%b-%Y").date()
+    return who, when
 
 
 def per_person(orders):
@@ -216,57 +265,104 @@ def per_person(orders):
                   key=lambda r: (-r[2], r[0].lower()))
 
 
-def _number(v):
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
+def _blank_kpi(name=""):
+    return {"name": name, "manager": "", "region": "", "dpms": 0, "open": 0, "revenue": 0.0, "overdue": 0,
+            "overdue_rev": 0.0, "due14": 0, "due14_rev": 0.0, "ok": 0, "ok_rev": 0.0, "no_date": 0, "no_rtdd": 0,
+            "passed": 0, "due_soon": 0, "revised": 0, "overdue_pct": 0, "avg_age": None, "oldest": None}
 
 
-def dpm_kpis(orders, soon=30):
-    """The DPM dashboard: one row per DPM (assigned orders only), most overdue first. Each row:
-    dpm, manager, region, open, overdue, overdue_pct, due_soon (due in 0..soon days), no_date, revised
-    (has a Revised Target Delivery Date), avg_age and oldest (order age in days, None when unknown)."""
+def dpm_kpis(orders, by="dpm", soon=30):
+    """The DPM dashboard's numbers for the assigned orders, one row per DPM (or per manager, team, cluster,
+    customer: by is the order's field, None for one Total row), most overdue first. Each row: name, manager,
+    region, dpms, open, revenue; overdue, due14, ok and no_date (the RTDD status, with _rev: their revenue);
+    no_rtdd, passed (what the overdue orders need), due_soon (due in 0..soon days), revised (has an RTDD),
+    overdue_pct, avg_age and oldest (order age in days, None when unknown)."""
     rows = {}
+    key = {OVERDUE: "overdue", DUE_14: "due14", NOT_OVERDUE: "ok", NO_DATE: "no_date"}
     for o in orders:
         if o["category"] != ASSIGNED:
             continue
-        r = rows.setdefault(o["dpm"], {"dpm": o["dpm"], "manager": o.get("manager") or "", "region": o["region"],
-                                       "open": 0, "overdue": 0, "due_soon": 0, "no_date": 0, "revised": 0,
-                                       "_ages": []})
+        name = "Total" if by is None else (o.get(by) or "")
+        r = rows.get(name)
+        if r is None:
+            r = rows[name] = dict(_blank_kpi(name), manager=(o.get("manager") or "") if by == "dpm" else "",
+                                  region=o["region"] if by == "dpm" else "", _ages=[], _dpms=set())
+        status = rtdd_status(o)
+        revenue = _number(o.get("revenue")) or 0
+        d = days_left(o)
         r["open"] += 1
-        late = is_overdue(o)
-        d = _number(o.get("due_days"))
-        r["overdue"] += late
-        r["due_soon"] += not late and d is not None and 0 <= d <= soon
-        r["no_date"] += not o.get("target")
+        r["revenue"] += revenue
+        r[key[status]] += 1
+        if status != NO_DATE:
+            r[key[status] + "_rev"] += revenue
+        r["no_rtdd"] += rtdd_action(o) == NO_RTDD
+        r["passed"] += rtdd_action(o) == RTDD_PASSED
+        r["due_soon"] += status != OVERDUE and d is not None and 0 <= d <= soon
         r["revised"] += bool(o.get("rtdd"))
+        r["_dpms"].add(o["dpm"])
         age = _number(o.get("age"))
         if age is not None:
             r["_ages"].append(age)
     out = []
     for r in rows.values():
         ages = r.pop("_ages")
+        r["dpms"] = len(r.pop("_dpms"))
         r["overdue_pct"] = round(100 * r["overdue"] / r["open"]) if r["open"] else 0
         r["avg_age"] = round(sum(ages) / len(ages)) if ages else None
         r["oldest"] = round(max(ages)) if ages else None
         out.append(r)
-    return sorted(out, key=lambda r: (-r["overdue"], -r["open"], r["dpm"].lower()))
+    return sorted(out, key=lambda r: (-r["overdue"], -r["open"], r["name"].lower()))
 
 
-def manager_kpis(dpm_rows):
-    """dpm_kpis() rows added up per manager: [{manager, dpms, open, overdue, overdue_pct, due_soon}],
-    most open orders first. DPMs whose manager is not known come under ""."""
-    by = {}
-    for r in dpm_rows:
-        m = by.setdefault(r["manager"], {"manager": r["manager"], "dpms": 0, "open": 0, "overdue": 0,
-                                         "due_soon": 0})
-        m["dpms"] += 1
-        for k in ("open", "overdue", "due_soon"):
-            m[k] += r[k]
-    for m in by.values():
-        m["overdue_pct"] = round(100 * m["overdue"] / m["open"]) if m["open"] else 0
-    return sorted(by.values(), key=lambda m: (-m["open"], m["manager"].lower()))
+def kpi_total(orders):
+    return (dpm_kpis(orders, by=None) or [_blank_kpi("Total")])[0]
+
+
+def due_ahead(orders, weeks=4):
+    """When the open orders fall due: [("Overdue", n), ("w/c 02-Nov", n)..., ("Later", n)], weeks from this one."""
+    monday = date.today() - timedelta(days=date.today().weekday())
+    counts = [0] * (weeks + 1)
+    overdue = 0
+    for o in orders:
+        status, d = rtdd_status(o), days_left(o)
+        if status == OVERDUE:
+            overdue += 1
+        elif d is not None:
+            week = max(((date.today() + timedelta(days=d)) - monday).days // 7, 0)
+            counts[min(week, weeks)] += 1
+    return ([("Overdue", overdue)] + [(f"w/c {monday + timedelta(weeks=i):%d-%b}", counts[i]) for i in range(weeks)]
+            + [("Later", counts[weeks])])
+
+
+def age_bands(orders):
+    """Open orders by age: [(band, n)], youngest first."""
+    bands = (("Under 3 months", 91), ("3-6 months", 183), ("6-12 months", 366), ("1-2 years", 731),
+             ("Over 2 years", None))
+    counts = [0] * len(bands)
+    for o in orders:
+        age = _number(o.get("age"))
+        if age is not None:
+            counts[next(i for i, (_, top) in enumerate(bands) if top is None or age < top)] += 1
+    return [(b[0], n) for b, n in zip(bands, counts)]
+
+
+def rtdd_reasons(orders):
+    """Whose reason moved the orders' dates: [(who, n)] for the orders with an RTDD, then those never revised."""
+    counts = {"Customer": 0, "Orange": 0, "MHS": 0, "Other": 0}
+    for o in orders:
+        if o.get("rtdd"):
+            who = rtdd_reason(o)[0] or "Other"
+            counts[who] += 1
+    items = [(k, v) for k, v in counts.items() if v or k != "Other"]
+    return items + [("Not revised", sum(1 for o in orders if not o.get("rtdd")))]
+
+
+def money(v):
+    """€2.66M, €89k, €950, -€1k."""
+    v = v or 0
+    a = abs(v)
+    text = f"€{a / 1e6:.2f}M" if a >= 1e6 else f"€{a / 1e3:.0f}k" if a >= 1e3 else f"€{a:.0f}"
+    return "-" + text if v < 0 and text != "€0" else text
 
 
 def fmt_date(d):

@@ -305,64 +305,104 @@ def export(path, orders, source_line="", filter_line=""):
     return path
 
 
-def export_kpis(path, dpm_rows, manager_rows, source_line="", filter_line=""):
-    """The DPM dashboard (gold_assignments.dpm_kpis / manager_kpis rows): headline numbers, the DPM scorecard
-    and the managers' table."""
+def export_kpis(path, dpm_rows, manager_rows, orders, source_line="", filter_line=""):
+    """The DPM dashboard: headline RTDD numbers and the DPM scorecard (gold_assignments.dpm_kpis rows), the same
+    per manager, and the orders that need attention."""
     wb = Workbook()
     ws = wb.active
     ws.title = "DPM scorecard"
     ws.sheet_view.showGridLines = False
-    ws["B2"] = "DPM dashboard - APM open orders"
+    ws["B2"] = "DPM dashboard - RTDD and APM open orders"
     ws["B2"].font = Font(name=FONT, size=18, bold=True, color=INK)
     ws["B3"] = "  ·  ".join(x for x in (source_line, filter_line,
                                          f"exported {datetime.now():%d-%b-%Y %H:%M}") if x)
     ws["B3"].font = Font(name=FONT, size=9, color=MUTED)
     ws.row_dimensions[2].height = 30
 
-    n = sum(r["open"] for r in dpm_rows)
-    late = sum(r["overdue"] for r in dpm_rows)
-    soon = sum(r["due_soon"] for r in dpm_rows)
+    t = gas.kpi_total(orders)
+    n = max(t["open"], 1)
     for i, (caption, value, sub, colour) in enumerate((
             ("DPMs with orders", len(dpm_rows), f"{len(manager_rows)} managers", "8A3FB8"),
-            ("Open orders", n, f"{n / max(len(dpm_rows), 1):.1f} per DPM", "1F86E0"),
-            ("Overdue", late, f"{late * 100 / max(n, 1):.0f}% of the orders", "E5484D"),
-            ("Due in 30 days", soon, f"{soon * 100 / max(n, 1):.0f}% of the orders", "F59E0B"))):
+            ("Open orders", t["open"], gas.money(t["revenue"]), "1F86E0"),
+            ("Overdue RTDD", t["overdue"], f"{gas.money(t['overdue_rev'])}  ·  {t['overdue'] * 100 / n:.0f}%", "E5484D"),
+            ("Overdue in 14 days", t["due14"], gas.money(t["due14_rev"]), "F59E0B"),
+            ("No RTDD set", t["no_rtdd"], "overdue, date never revised", "A15C00"))):
         _kpi(ws, 5, 2 + i * 3, caption, value, sub, colour)
 
-    columns = ["DPM", "Manager", "Region", "Open", "Overdue", "% overdue", "Due ≤ 30 days", "No target date",
-               "RTDD set", "Avg age (days)", "Oldest (days)"]
-    rows = [[r["dpm"], r["manager"], r["region"], r["open"], r["overdue"], r["overdue_pct"] / 100, r["due_soon"],
-             r["no_date"], r["revised"], r["avg_age"], r["oldest"]] for r in dpm_rows]
-    first, last = _table(ws, 9, 2, f"{len(rows)} DPMs", columns, rows)
-    for r in range(first, last + 1):
-        ws.cell(r, 7).number_format = "0%"
-        pct = ws.cell(r, 7).value or 0
-        if ws.cell(r, 6).value and pct >= 0.3:
-            ws.cell(r, 7).font = Font(name=FONT, size=9, bold=True, color="C62828")
-        elif ws.cell(r, 6).value and pct >= 0.15:
-            ws.cell(r, 7).font = Font(name=FONT, size=9, bold=True, color="A15C00")
-    for col, w in zip("BCDEFGHIJKL", (30, 28, 14, 9, 10, 11, 14, 15, 10, 14, 13)):
-        ws.column_dimensions[col].width = w
+    columns = ["Open", "Revenue €", "Not overdue", "Not overdue €", "Overdue in 14 days", "In 14 days €",
+               "Overdue RTDD", "Overdue €", "% overdue", "No RTDD set", "RTDD date passed", "No date",
+               "Due ≤ 30 days", "Avg age (days)", "Oldest (days)"]
+
+    def numbers(r):
+        return [r["open"], round(r["revenue"]), r["ok"], round(r["ok_rev"]), r["due14"], round(r["due14_rev"]),
+                r["overdue"], round(r["overdue_rev"]), r["overdue_pct"] / 100, r["no_rtdd"], r["passed"],
+                r["no_date"], r["due_soon"], r["avg_age"], r["oldest"]]
+
+    def tidy(sheet, first, last, left):
+        """Thousands in the revenue columns, % and the red / amber of the % overdue."""
+        for r in range(first, last + 1):
+            for j in (1, 3, 5, 7):
+                sheet.cell(r, left + j).number_format = "#,##0"
+            cell = sheet.cell(r, left + 8)
+            cell.number_format = "0%"
+            if sheet.cell(r, left + 6).value and (cell.value or 0) >= 0.3:
+                cell.font = Font(name=FONT, size=9, bold=True, color="C62828")
+            elif sheet.cell(r, left + 6).value and (cell.value or 0) >= 0.15:
+                cell.font = Font(name=FONT, size=9, bold=True, color="A15C00")
+
+    rows = [[r["name"], r["manager"], r["region"]] + numbers(r) for r in dpm_rows]
+    first, last = _table(ws, 9, 2, f"{len(rows)} DPMs", ["DPM", "Manager", "Region"] + columns, rows)
+    tidy(ws, first, last, 5)
+    for i, w in enumerate((30, 28, 14) + (9, 12, 11, 12, 12, 11, 11, 11, 10, 11, 11, 9, 11, 11, 10)):
+        ws.column_dimensions[get_column_letter(2 + i)].width = w
     ws.freeze_panes = "C11"
     top = sorted((r for r in dpm_rows if r["overdue"]), key=lambda r: -r["overdue"])[:15]
-    if top:  # the chart's numbers sit far to the right (AA:AB), out of the way
-        c1, c2 = _table(ws, 9, 27, "Most overdue", ["DPM", "Overdue"], [[r["dpm"], r["overdue"]] for r in top])
-        _bar(ws, "Most overdue DPMs", Reference(ws, min_col=27, min_row=c1, max_row=c2),
-             Reference(ws, min_col=28, min_row=c1 - 1, max_row=c2), "N9", colour="E5484D", height=9.5, width=14)
+    if top:  # the chart's numbers sit far to the right (AH:AI), out of the way
+        c1, c2 = _table(ws, 9, 34, "Most overdue", ["DPM", "Overdue"], [[r["name"], r["overdue"]] for r in top])
+        _bar(ws, "Most overdue DPMs", Reference(ws, min_col=34, min_row=c1, max_row=c2),
+             Reference(ws, min_col=35, min_row=c1 - 1, max_row=c2), "U9", colour="E5484D", height=9.5, width=14)
 
     sh = wb.create_sheet("By manager")
     sh.sheet_view.showGridLines = False
     sh["A1"] = "DPMs' orders per manager"
     sh["A1"].font = Font(name=FONT, size=14, bold=True, color=INK)
-    rows = [[m["manager"] or "(manager not known)", m["dpms"], m["open"], m["overdue"], m["overdue_pct"] / 100,
-             m["due_soon"]] for m in manager_rows]
-    first, last = _table(sh, 3, 1, f"{len(rows)} managers", ["Manager", "DPMs", "Open", "Overdue", "% overdue",
-                                                             "Due ≤ 30 days"], rows)
+    rows = [[m["name"] or "(manager not known)", m["dpms"]] + numbers(m) for m in manager_rows]
+    first, last = _table(sh, 3, 1, f"{len(rows)} managers", ["Manager", "DPMs"] + columns, rows)
+    tidy(sh, first, last, 3)
+    for i, w in enumerate((32, 7) + (9, 12, 11, 12, 12, 11, 11, 11, 10, 11, 11, 9, 11, 11, 10)):
+        sh.column_dimensions[get_column_letter(1 + i)].width = w
+    sh.freeze_panes = "B5"
+
+    od = wb.create_sheet("Orders due")
+    od.sheet_view.showGridLines = False
+    od["A1"] = "Orders overdue, due in 14 days or without a date"
+    od["A1"].font = Font(name=FONT, size=14, bold=True, color=INK)
+    due = sorted((o for o in orders if gas.rtdd_status(o) != gas.NOT_OVERDUE),
+                 key=lambda o: 10 ** 9 if gas.days_left(o) is None else gas.days_left(o))
+    heads = ["Order", "Status", "Type", "Customer", "End customer", "DPM", "Manager", "Region", "Sales cluster",
+             "Initial target date", "RTDD", "Days to due", "RTDD status", "Needs", "RTDD reason", "Reason date",
+             "Revenue €", "Order age (days)", "Service", "Project", "Country"]
+    rows = []
+    for o in due:
+        who, when = gas.rtdd_reason(o)
+        rows.append([o["order"], o.get("status"), o.get("type"), o.get("customer"), o.get("end_customer"), o["dpm"],
+                     o.get("manager"), o["region"], o.get("cluster"), _value(o.get("ittd")), _value(o.get("rtdd")),
+                     gas.days_left(o), gas.rtdd_status(o), gas.rtdd_action(o), who, _value(when),
+                     round(gas._number(o.get("revenue")) or 0), o.get("age"), o.get("service"), o.get("project"),
+                     (o.get("country") or "").title()])
+    first, last = _table(od, 3, 1, f"{len(rows)} orders, most overdue first", heads, rows)
     for r in range(first, last + 1):
-        sh.cell(r, 5).number_format = "0%"
-    for col, w in zip("ABCDEF", (32, 8, 9, 10, 11, 14)):
-        sh.column_dimensions[col].width = w
-    sh.freeze_panes = "A5"
+        od.cell(r, 17).number_format = "#,##0"
+        status = od.cell(r, 13).value
+        if status == gas.OVERDUE:
+            od.cell(r, 13).font = Font(name=FONT, size=9, bold=True, color="C62828")
+        elif status == gas.DUE_14:
+            od.cell(r, 13).font = Font(name=FONT, size=9, bold=True, color="A15C00")
+    for i, w in enumerate((15, 10, 10, 30, 30, 24, 24, 13, 15, 13, 12, 8, 17, 16, 10, 12, 10, 9, 28, 28, 14)):
+        od.column_dimensions[get_column_letter(1 + i)].width = w
+    if rows:
+        od.auto_filter.ref = f"A4:{get_column_letter(len(heads))}{last}"
+    od.freeze_panes = "B5"
 
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)

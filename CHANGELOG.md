@@ -1,5 +1,25 @@
 # GOLD Express - what's new
 
+## 2.19.0
+- **DPM dashboard: now a full RTDD dashboard for DPMs and managers** - built like the Performance
+  Management page of the DPM KPIs report, from the daily APM Open Orders sheet. Six cards: open orders,
+  Overdue RTDD, Overdue in 14 days, Not overdue (each with its revenue), No RTDD set and average order age.
+- **Three views**
+  - **Overview**: RTDD status, when orders fall due week by week, why RTDDs moved (Customer, Orange,
+    MHS), order age, biggest customers and a By manager table.
+  - **Scorecard**: Not overdue, Overdue in 14 days, Overdue RTDD and Total, each with orders and revenue,
+    plus % overdue, No RTDD and average age, by DPM, manager, DPM team, sales cluster or customer.
+    Double-click a row to see its orders.
+  - **Orders due**: the orders to act on, most overdue first, with ITTD, RTDD, days to due, RTDD status,
+    reason and revenue. Show overdue, next 14 or 30 days, No RTDD set, RTDD date passed and more.
+    Select orders and press **Update RTDD** to send them to the Revised Target Date page.
+- **Filters**: region, manager, DPM, sales cluster, and a find box for customer, product, project or
+  order number. Region, manager and DPM are remembered, so everyone comes back to their own numbers.
+  Click a card or a status to open those orders.
+- **Excel export**: adds revenue and RTDD status to the scorecards, and a new Orders due sheet.
+- Overdue now follows the sheet's Backlog column everywhere, including Order Assignment, so the app's
+  numbers use the same rule as the report.
+
 ## 2.18.0
 - **DPM dashboard (new page, under Order Assignment)** - KPIs for managers, from the same APM Open
   Orders sheet: DPMs with orders, open orders, overdue, due in the next 30 days, orders per DPM and
