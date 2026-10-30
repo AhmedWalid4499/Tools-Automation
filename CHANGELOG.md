@@ -1,5 +1,10 @@
 # GOLD Express - what's new
 
+## 2.21.1
+- **The GOLD bot moves smoothly**: the bot, its purple glow, the flowing banner and the thinking dots
+  now run at a much higher frame rate, follow the clock so a busy moment no longer slows them, and the
+  banner no longer jumps when its colours loop.
+
 ## 2.21.0
 - **Detailed orders due** (the DPM dashboard's Orders due view, renamed): Order number, Order status,
   Customer site reference, DPM, ITDD, RTDD, Days, RTDD status, Reason, € and Age. Find also searches the

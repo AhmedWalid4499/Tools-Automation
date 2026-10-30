@@ -5,12 +5,13 @@ Tkinter draws only square shapes, so every rounded or gradient surface is an ima
 when its size changes.
 """
 import math
+import time
 import tkinter as tk
 import weakref
 from pathlib import Path
 from tkinter import font as tkfont
 
-from PIL import Image, ImageDraw, ImageFilter, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageTk
 
 FONT = "Segoe UI"
 ICONS = "Segoe Fluent Icons" if Path(r"C:\Windows\Fonts\SegoeIcons.ttf").exists() else "Segoe MDL2 Assets"
@@ -637,33 +638,42 @@ class Progress(tk.Canvas, _Redraw):
             self.create_image(0, 0, image=bar, anchor="nw")
 
 
+FRAME_MS = 15  # the animations look at the clock this often: about 60 times a second
+
+
 class Bot(tk.Canvas):
     """The Friendly GOLD bot, animated: it floats gently above its shadow ("idle"), bobs faster with a
-    little wiggle while it works ("busy"), and hops when clicked."""
+    little wiggle while it works ("busy"), and hops when clicked. Each frame is picked from the clock, so a
+    moment when the app is busy never slows the movement down."""
 
     _cache = {}
+    SECONDS = {"idle": 2.2, "busy": 0.8, "hop": 0.5}  # one loop
+    FRAMES = {"idle": 66, "busy": 24, "hop": 15}  # about 30 a second
 
     def __init__(self, parent, image_path, size=120, bg=CARD, mode="idle", clickable=True, halo=False):
         w, h = int(size * 1.0), int(size * 1.22)
         super().__init__(parent, width=w, height=h, background=bg, highlightthickness=0, borderwidth=0)
-        self.size, self.mode, self._job, self._i = size, mode, None, 0
-        self.frames = {m: self._frames(image_path, size, m, bg, halo) for m in ("idle", "busy", "hop")}
+        self.size, self.mode, self._job, self._start, self._shown = size, mode, None, 0.0, None
+        self._source = (image_path, size, bg, halo)
         self._item = self.create_image(w // 2, 0, anchor="n")
         if clickable:
             self.configure(cursor="hand2")
             self.bind("<Button-1>", lambda e: self.hop())
         self.start(mode)
 
+    def frames(self, mode):
+        path, size, bg, halo = self._source
+        return self._frames(path, size, mode, bg, halo)  # built the first time a movement is needed
+
     @classmethod
     def _frames(cls, path, size, mode, bg, halo=False):
-        import math
         key = (str(path), size, mode, bg, halo)
         if key in cls._cache:
             return cls._cache[key]
         bot = Image.open(path).convert("RGBA")
         bot.thumbnail((int(size * 0.92), int(size * 0.92)), Image.LANCZOS)
         w, h = int(size * 1.0), int(size * 1.22)
-        n = {"idle": 36, "busy": 16, "hop": 14}[mode]
+        n = cls.FRAMES[mode]
         frames = []
         for i in range(n):
             t = i / n
@@ -676,13 +686,14 @@ class Bot(tk.Canvas):
             im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             if halo:  # an AI glow behind the bot, breathing slowly
                 pulse = (math.sin(2 * math.pi * t) + 1) / 2
-                g = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                small = 4  # a soft glow loses nothing by being drawn small and enlarged, and is far quicker
+                g = Image.new("RGBA", (w // small, h // small), (0, 0, 0, 0))
                 gd = ImageDraw.Draw(g)
-                cx, cy, rr = w / 2, h * 0.43, size * (0.27 + 0.03 * pulse)  # fades out well inside the frame
+                cx, cy, rr = g.width / 2, g.height * 0.43, size * (0.27 + 0.03 * pulse) / small  # fades out inside
                 gd.ellipse((cx - rr, cy - rr, cx + rr, cy + rr), fill=_hex(AI_A) + (int(120 + 60 * pulse),))
                 gd.ellipse((cx - rr * 0.55, cy - rr * 0.9, cx + rr * 1.05, cy + rr * 0.5),
                            fill=_hex(AI_B) + (int(90 + 50 * pulse),))
-                im.alpha_composite(g.filter(ImageFilter.GaussianBlur(size * 0.08)))
+                im.alpha_composite(g.filter(ImageFilter.GaussianBlur(size * 0.08 / small)).resize((w, h), Image.BILINEAR))
             # shadow: smaller and lighter when the bot is higher
             sw = w * (0.62 - lift * 1.4)
             sy = h - h * 0.07
@@ -692,14 +703,16 @@ class Bot(tk.Canvas):
                                            fill=(120, 160, 220, max(alpha, 20)) if not DARK else (0, 0, 0, max(alpha, 30)))
             im.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(1, size // 40))))
             b = bot.rotate(angle, resample=Image.BICUBIC, expand=True) if angle else bot
-            top = int(h * 0.02 + (0.12 - lift) * size * 0.9)
-            im.alpha_composite(b, ((w - b.width) // 2, max(0, top)))
+            top = max(0.0, h * 0.02 + (0.12 - lift) * size * 0.9)
+            whole = int(top)  # the rest of a pixel by resampling: no stepping on a slow float
+            b = b.transform(b.size, Image.AFFINE, (1, 0, 0, 0, 1, whole - top), resample=Image.BICUBIC)
+            im.alpha_composite(b, ((w - b.width) // 2, whole))
             frames.append(ImageTk.PhotoImage(im))
         cls._cache[key] = frames
         return frames
 
     def start(self, mode="idle"):
-        self.mode, self._i = mode, 0
+        self.mode, self._start = mode, time.perf_counter()
         if self._job is None:
             self._tick()
 
@@ -715,22 +728,31 @@ class Bot(tk.Canvas):
     def _tick(self):
         if not self.winfo_exists():
             return
-        frames = self.frames[self.mode]
-        self.itemconfigure(self._item, image=frames[self._i % len(frames)])
-        self._i += 1
-        if self.mode == "hop" and self._i >= len(frames):
-            self.mode, self._i = "idle", 0
-        delay = {"idle": 70, "busy": 50, "hop": 35}[self.mode]
-        self._job = self.after(delay, self._tick)
+        if not self.winfo_viewable():  # another page is showing: just look again in a moment (no CPU)
+            self._job = self.after(400, self._tick)
+            return
+        now = time.perf_counter() - self._start
+        if self.mode == "hop" and now >= self.SECONDS["hop"]:
+            self.mode, self._start, now = "idle", time.perf_counter(), 0.0
+        frames = self.frames(self.mode)
+        frame = frames[int(now / self.SECONDS[self.mode] * len(frames)) % len(frames)]
+        if frame is not self._shown:
+            self._shown = frame
+            self.itemconfigure(self._item, image=frame)
+        self._job = self.after(FRAME_MS, self._tick)
 
 
 class AIBanner(tk.Canvas, _Redraw):
     """The GOLD bot's header: a rounded, slowly flowing aurora gradient (AI colours) with the bot, its name,
-    an "AI" badge, a hint, an optional chip (the order in view) and a "New chat" button drawn on it."""
+    an "AI" badge, a hint, an optional chip (the order in view) and a "New chat" button drawn on it.
+    The gradient is one long picture that repeats seamlessly and slides under the rounded corners."""
+
+    SECONDS = 9  # one loop of the colours
 
     def __init__(self, parent, bot_path=None, title="", hint="", on_new=None, bg=CARD, height=64):
         super().__init__(parent, height=height, background=bg, highlightthickness=0, borderwidth=0)
         self.title, self.hint, self.chip, self.on_new = title, hint, "", on_new
+        self.corner_colour, self._loop = bg, 0
         self.f_title = tkfont.Font(family="Segoe UI Semibold", size=12)
         self.f_hint = tkfont.Font(family=FONT, size=9)
         self.f_badge = tkfont.Font(family=FONT, size=8, weight="bold")
@@ -739,7 +761,8 @@ class AIBanner(tk.Canvas, _Redraw):
             b = Image.open(bot_path).convert("RGBA")
             b.thumbnail((height - 18, height - 18), Image.LANCZOS)
             self._bot = ImageTk.PhotoImage(b)
-        self._frames, self._i, self._job, self._imgs = [], 0, None, []
+        self._strip, self._corners, self._job, self._imgs, self._bg = None, None, None, [], None
+        self._start = time.perf_counter()
         self._watch()
         self.bind("<Button-1>", self._clicked)
         self.bind("<Motion>", self._motion)
@@ -751,29 +774,34 @@ class AIBanner(tk.Canvas, _Redraw):
             self._draw_fg()
 
     def redraw(self, w, h):
-        # a strip twice as wide, looping: AI_A -> AI_B -> pink -> AI_A; frames slide along it
+        # one loop of colours two banners long, AI_A -> AI_B -> pink -> AI_A, then a banner more of the same so
+        # the picture can slide its whole loop and start again where it looks identical
         cols = [AI_A, AI_B, "#E879F9", AI_A]
         n = 3
-        wide = Image.new("RGBA", (w * 2, h))
         seg = (w * 2) // n
+        loop = seg * n
+        strip = Image.new("RGBA", (loop, h))
         for k in range(n):
-            wide.paste(gradient(seg + 1, h, cols[k], cols[k + 1]), (k * seg, 0))
-        blobs = Image.new("RGBA", (w * 2, h), (0, 0, 0, 0))
+            strip.paste(gradient(seg + 1, h, cols[k], cols[k + 1]), (k * seg, 0))
+        blobs = Image.new("RGBA", (loop * 3, h), (0, 0, 0, 0))  # three loops, so the glow wraps around the seam
         d = ImageDraw.Draw(blobs)
-        for cx, cy, rr, a in ((0.15, 0.2, 0.35, 70), (0.55, 0.9, 0.4, 60), (0.85, 0.1, 0.3, 70)):
-            d.ellipse(((cx * 2 * w) - rr * h * 3, cy * h - rr * h * 3, (cx * 2 * w) + rr * h * 3, cy * h + rr * h * 3),
-                      fill=(255, 255, 255, a))
-        wide = Image.alpha_composite(wide, blobs.filter(ImageFilter.GaussianBlur(h * 0.6)))
-        mask = rounded_image(w, h, 16, (255, 255, 255, 255)).split()[-1]
-        self._frames = []
-        steps = 48
-        for i in range(steps):
-            x = int(i / steps * w)
-            frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            frame.paste(wide.crop((x, 0, x + w, h)), (0, 0), mask)
-            self._frames.append(ImageTk.PhotoImage(frame))
+        for shift in (0, loop, loop * 2):
+            for cx, cy, rr, a in ((0.15, 0.2, 0.35, 70), (0.55, 0.9, 0.4, 60), (0.85, 0.1, 0.3, 70)):
+                x = shift + cx * loop
+                d.ellipse((x - rr * h * 3, cy * h - rr * h * 3, x + rr * h * 3, cy * h + rr * h * 3),
+                          fill=(255, 255, 255, a))
+        strip.alpha_composite(blobs.filter(ImageFilter.GaussianBlur(h * 0.6)).crop((loop, 0, loop * 2, h)))
+        wide = Image.new("RGBA", (loop + w, h))
+        wide.paste(strip, (0, 0))
+        wide.paste(strip.crop((0, 0, w, h)), (loop, 0))
+        self._loop = loop
+        self._strip = ImageTk.PhotoImage(wide)
+        corners = Image.new("RGBA", (w, h), _hex(self.corner_colour) + (255,))
+        corners.putalpha(ImageOps.invert(rounded_image(w, h, 16, (255, 255, 255, 255)).split()[-1]))
+        self._corners = ImageTk.PhotoImage(corners)
         self.delete("all")
-        self._bg = self.create_image(0, 0, anchor="nw", image=self._frames[0])
+        self._bg = self.create_image(0, 0, anchor="nw", image=self._strip)
+        self.create_image(0, 0, anchor="nw", image=self._corners)
         self._draw_fg()
         if self._job is None:
             self._tick()
@@ -829,25 +857,27 @@ class AIBanner(tk.Canvas, _Redraw):
         self.configure(cursor="hand2" if self._in_new(e) else "")
 
     def _tick(self):
-        if not self.winfo_exists() or not self._frames:
+        if not self.winfo_exists() or not self._strip:
             self._job = None
             return
         if not self.winfo_ismapped():  # another page is showing: just look again in a moment (no CPU)
             self._job = self.after(600, self._tick)
             return
-        self._i = (self._i + 1) % len(self._frames)
-        self.itemconfigure(self._bg, image=self._frames[self._i])
-        self._job = self.after(90, self._tick)
+        now = (time.perf_counter() - self._start) / self.SECONDS % 1
+        self.coords(self._bg, -round(now * self._loop), 0)
+        self._job = self.after(FRAME_MS, self._tick)
 
 
 class AIThinking(tk.Canvas):
     """'Working' row of the GOLD bot: three glowing dots pulsing in the AI colours, then the text."""
 
+    SECONDS = 0.9  # one wave
+
     def __init__(self, parent, bg=CARD, text="Thinking..."):
         self.font = tkfont.Font(family=FONT, size=9, slant="italic")
         h = self.font.metrics("linespace") + 10
         super().__init__(parent, height=h, width=420, background=bg, highlightthickness=0, borderwidth=0)
-        self.base, self._i, self._dots = text, 0, []
+        self.base, self._start, self._dots = text, time.perf_counter(), []
         cols = [AI_A, mix(AI_A, AI_B, 0.5), AI_B]
         for k in range(3):
             self._dots.append(self.create_oval(0, 0, 0, 0, fill=cols[k], outline=""))
@@ -861,16 +891,15 @@ class AIThinking(tk.Canvas):
         self.configure(width=min(48 + self.font.measure(text) + 10, 900))
 
     def _tick(self):
-        import math
         if not self.winfo_exists():
             return
+        phase = 2 * math.pi * (time.perf_counter() - self._start) / self.SECONDS
         for k, dot in enumerate(self._dots):
-            p = (math.sin(self._i / 3.0 - k * 0.9) + 1) / 2  # 0..1, a wave running through the dots
+            p = (math.sin(phase - k * 0.9) + 1) / 2  # 0..1, a wave running through the dots
             r = 2.5 + 2.5 * p
             cx, cy = 10 + k * 13, self.h / 2 - 3 * p
             self.coords(dot, cx - r, cy - r, cx + r, cy + r)
-        self._i += 1
-        self.after(60, self._tick)
+        self.after(FRAME_MS, self._tick)
 
 
 class Tooltip:
