@@ -17,17 +17,19 @@ import threading
 import time
 import traceback
 from collections import Counter
+from contextlib import suppress
 from datetime import date, datetime
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from PIL import ImageTk
 from selenium.webdriver.support.ui import WebDriverWait
 
 import gold_ai as gai
 import gold_assignments as gas
+import gold_board as gb
 import gold_extract as gx
 import gold_markdown as gmd
 import gold_milestones as gm
@@ -56,6 +58,7 @@ _OLD_CHATS_DIR = HERE / "chats"  # where chats were kept before 2.13.0
 # Org Chart departments whose people are DPMs (Settings > DPM departments can change the list)
 DEFAULT_DPM_DEPARTMENTS = ["APM Europe", "APM APAC", "APM AME"]  # APMs only (no CPM / other departments)
 TRACKER_COMMENTS = HERE / "tracker_comments.json"  # Overview > Tracker: comments / next steps per order
+MY_RTDD_FILE = HERE / "my_rtdd.json"  # the RTDDs read from GOLD for My Orders, so each is read only when needed
 OA_FILE = HERE / "apm_open_orders.xlsx"  # the latest APM Open Orders sheet (replaced on every refresh)
 
 # Palette (warm light background, white rounded panels, orange accent) - see gold_ui
@@ -1295,19 +1298,25 @@ class App(tk.Tk):
         win.grab_set()
 
     # ----- My Orders tab (dashboard of the orders GOLD lists under "My orders only")
+    MY_SHEET_DAYS = 3  # how old the APM sheet may be to trust its RTDDs for My Orders
+    MY_RTDD_SECONDS = 8  # about the time to read one order's RTDD from GOLD
     STATUS_COLOURS = {"Creation": "#9AA5B1", "Pricing": "#A78BFA", "Approval": "#F59E0B", "Release": "#38BDF8",
                       "Manage": "#22C55E", "Acceptance": "#14B8A6", "Billing": "#3B82F6",
                       "Awaiting Close": "#FB923C", "On-Hold": "#EF4444", "Closed": "#94A3B8"}
     CUSTOMER_COLOURS = ("#1F86E0", "#56A72C", "#FF7A00", "#8A3FB8", "#128577", "#DD3F58")
     MY_COLUMNS = (("order", "Order", 95), ("customer", "Customer name", 170), ("cust_site_ref", "Cust. site ref", 120),
-                  ("status", "Order status", 105), ("target", "Target date", 95), ("service", "Service", 200),
+                  ("status", "Order status", 100), ("target", "Target date", 96), ("rtdd", "RTDD", 96),
+                  ("service", "Service", 200),
                   ("type", "Type", 90), ("orange_site_ref", "Orange site ref", 240))
-    MY_SHOWN = ("order", "customer", "cust_site_ref", "status", "target")  # the rest is in the Excel export
+    MY_SHOWN = ("order", "customer", "cust_site_ref", "status", "target", "rtdd")  # the rest is in the Excel export
 
     def _build_my_tab(self, f):
         self.my_frame = f
         self.my_orders, self.my_time = [], None
         self.my_filter = {"scope": "open", "status": None, "customer": None, "when": None}
+        self.oa_orders, self.oa_time = [], None  # the sheet's RTDDs, once Order Assignment has it
+        self.my_rtdds = self._my_rtdds_load()
+        self.my_board = gb.Board(gas.order_dims, self._my_sliced)  # what was clicked in the dashboard
 
         # Colourful counters
         kpi = tk.Frame(f, background=BG)
@@ -1317,15 +1326,33 @@ class App(tk.Tk):
                 ("total", "My orders", "", "v_blue", lambda: self._my_set_filter(scope="all")),
                 ("open", "In progress", "", "v_green", lambda: self._my_set_filter(scope="open")),
                 ("due", "Due in 30 days", "", "v_orange", lambda: self._my_set_filter(when="due30")),
-                ("late", "Past target date", "", "v_rose", lambda: self._my_set_filter(when="late")),
+                ("late", "Overdue", "", "v_rose", lambda: self._my_set_filter(when="late")),
                 ("customers", "Customers", "", "v_purple", lambda: self._my_set_filter(scope="all")))):
             card = gui.StatCard(kpi, caption, icon, palette, sub_lines=1, big_size=15, command=action)
             card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
             kpi.columnconfigure(col, weight=1, uniform="mykpi")
             self.my_cards[key] = card
 
+        # The two views, and the buttons for overdue orders (GOLD's list has no RTDDs: they are read when needed)
+        views = tk.Frame(f, background=BG)
+        views.pack(fill="x", padx=6, pady=(0, 8))
+        self.my_view = tk.StringVar(value="orders")
+        for key, title in (("orders", "Orders"), ("board", "Dashboard")):
+            ttk.Radiobutton(views, text=title, value=key, variable=self.my_view, style="SegSm.TRadiobutton",
+                            command=self._my_view_changed).pack(side="left", padx=(0, 4))
+        self.my_slice_chip = gui.Pill(views, "", "white", RED, bg=BG, command=self.my_board.clear)
+        self.my_send = self._btn(views, "Send overdue to RTDD", self._my_send_overdue, "Small.TButton")
+        self.my_send.pack(side="right")
+        self.my_check = self._btn(views, "Check RTDDs", self._my_check_rtdds, "Small.TButton")
+        self.my_check.pack(side="right", padx=6)
+        self.my_rtdd_note = tk.Label(views, text="", bg=BG, fg=MUTED, font=(FONT, 9))
+        self.my_rtdd_note.pack(side="right", padx=6)
+
+        self.my_dash = tk.Frame(f, background=BG)
+        self._build_my_board(self.my_dash)
+
         # Below the counters: the orders (left, large) and a column of charts (right)
-        lower = tk.Frame(f, background=BG)
+        lower = self.my_lower = tk.Frame(f, background=BG)
         lower.pack(fill="both", expand=True)
         scale = self.winfo_fpixels("1i") / 96  # sizes below are for 100% screen scaling
         side = tk.Frame(lower, background=BG)
@@ -1392,7 +1419,7 @@ class App(tk.Tk):
         for c, t, w in self.MY_COLUMNS:
             self.my_tree.heading(c, text=t, anchor="w", command=lambda c=c: self._my_sort(c))
             self.my_tree.column(c, width=int(w * scale), minwidth=int(70 * scale), anchor="w",
-                                stretch=True)  # share the tile's width
+                                stretch=c not in ("order", "status", "target", "rtdd"))  # the others share the rest
         self.my_tree.configure(displaycolumns=self.MY_SHOWN)
         self.my_tree.tag_configure("Closed", foreground=MUTED)
         self.my_tree.tag_configure("late", foreground=RED)
@@ -1417,6 +1444,154 @@ class App(tk.Tk):
         self.my_sort_key = ("target", False)
         self._my_render()
 
+    def _build_my_board(self, f):
+        f, height = self._board_area(f)
+        b = self.my_board
+        tile = lambda row, col, title, icon: self._board_tile(f, height, row, col, title, icon)
+        b.donut(tile(0, 0, "RTDD status", "\uEB05"), "status", self.BOARD_STATUS)
+        body = tile(0, 1, "When orders fall due", "\uE787")
+        b.bars(body, "due", self._board_due_colours(), values=["Overdue"] + gas.week_labels())
+        self.my_later = tk.Label(body, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w")
+        self.my_later.pack(fill="x")
+        late = [name for name, _ in gas.LATE_BANDS]
+        b.bars(tile(0, 2, "How late the overdue orders are", "\uE7BA"), "late",
+               dict(zip(late, ("#F5C451", "#F59E0B", "#EF6C4D", RED))), rows=4, values=late)
+        b.bars(tile(1, 0, "Order stage", "\uE9D2"), "stage", self.STATUS_COLOURS)
+        b.bars(tile(1, 1, "Top customers", "\uE731"), "customer", "#1F86E0")
+        b.bars(tile(1, 2, "Why RTDDs moved", "\uE8BD"), "reason", self.BOARD_REASONS, rows=5,
+               values=("Customer", "Orange", "Not revised", "Not checked"))
+        b.bars(tile(2, 0, "Order type", "\uE8A5"), "type", {"New": "#22C55E", "Change": "#38BDF8",
+                                                            "Disconnect": "#94A3B8"}, rows=3)
+        b.bars(tile(2, 1, "Top products", "\uE7B8"), "service", "#8A3FB8")
+        b.bars(tile(2, 2, "Top countries", "\uE774"), "country", "#128577")
+
+    def _my_view_changed(self):
+        self.my_lower.pack_forget()
+        self.my_dash.pack_forget()
+        (self.my_dash if self.my_view.get() == "board" else self.my_lower).pack(fill="both", expand=True)
+        self._my_sliced()
+
+    def _my_live(self):
+        return [o for o in self.my_orders if o.get("status") != "Closed"]
+
+    def _my_sliced(self):
+        """The orders changed, or a slice of the dashboard was clicked: everything follows."""
+        board = self.my_board
+        if self.my_view.get() == "board":
+            board.refresh()
+            later = sum(1 for o in board.without("due") if gas.due_week(o) == "Later")
+            self.my_later.configure(text=f"{later:,} more after that" if self.my_time else "")
+        if board.selected:
+            self.my_slice_chip.set(board.text() + "   ✕")
+            self.my_slice_chip.pack(side="left", padx=(12, 0))
+        else:
+            self.my_slice_chip.pack_forget()
+        self._my_cards(gmo.summary(board.chosen() if board.selected else self.my_orders))
+        self._my_fill()
+
+    # --- RTDDs: GOLD's list has none. From the APM sheet when this person has it, else read from the order
+    def _my_rtdds_load(self):
+        try:
+            data = json.loads(MY_RTDD_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        for k in data.values():
+            k["rtdd"] = date.fromisoformat(k["rtdd"]) if k.get("rtdd") else None
+        return data
+
+    def _my_rtdds_save(self):
+        data = {o: dict(k, rtdd=str(k["rtdd"]) if k.get("rtdd") else None) for o, k in self.my_rtdds.items()}
+        with suppress(OSError):
+            MY_RTDD_FILE.write_text(json.dumps(data, indent=0), encoding="utf-8")
+
+    def _my_forget_rtdds(self, orders):
+        for order in orders:
+            self.my_rtdds[order] = {"recheck": True}
+        self._my_rtdds_save()
+
+    def _my_known_rtdds(self):
+        """{order: {rtdd, reason}} for the orders whose RTDD can be trusted: read from GOLD today (or a date still
+        ahead, which only a new RTDD changes), else the APM sheet."""
+        today = str(date.today())
+        known = {}
+        if self.oa_orders and time.time() - (self.oa_time or 0) < self.MY_SHEET_DAYS * 86400:
+            known = {o["order"]: {"rtdd": o.get("rtdd"), "reason": o.get("rtdd_reason") or ""}
+                     for o in self.oa_orders}
+        for order, k in self.my_rtdds.items():
+            if k.get("recheck"):
+                known.pop(order, None)
+            elif k.get("read") == today or (k.get("rtdd") and k["rtdd"] >= date.today()):
+                known[order] = {"rtdd": k.get("rtdd"), "reason": k.get("reason") or ""}
+        return known
+
+    def _my_unchecked(self):
+        return [o["order"] for o in self._my_live() if gas.rtdd_action(o) == gas.NOT_CHECKED]
+
+    def _my_overdue(self):
+        return [o["order"] for o in self._my_live() if gas.is_overdue(o)]
+
+    def _my_check_rtdds(self, then=None):
+        """Read the RTDD of the orders past their initial date, from GOLD (nothing is changed); then then()."""
+        todo = self._my_unchecked()
+        if not todo:
+            if then:
+                then()
+            elif self.my_time:
+                messagebox.showinfo(APP_NAME, "Every overdue order's RTDD is already known.")
+            return
+        if self.busy:
+            return
+        minutes = max(round(len(todo) * self.MY_RTDD_SECONDS / 60), 1)
+        if len(todo) > 20 and not messagebox.askyesno(
+                APP_NAME, f"{len(todo)} orders have to be opened in GOLD to read their RTDD. This takes about "
+                          f"{minutes} minutes.\n\nContinue?"):
+            return
+        w = self.worker
+
+        def job():
+            w.ensure_browser()
+            found, failed = {}, 0
+            for i, order in enumerate(todo, 1):
+                self.log(f"My orders: reading the RTDD of {order} ({i} of {len(todo)})...")
+                try:
+                    found[order] = gm.read_rtdd(w.driver, w.wait, order)
+                    failed = 0
+                except Exception as e:
+                    self.log(f"My orders: {order}: {e}")
+                    failed += 1
+                    if failed == 3:
+                        break
+            return found
+
+        def done(found):
+            today = str(date.today())
+            for order, k in found.items():
+                self.my_rtdds[order] = dict(k, read=today)
+            self._my_rtdds_save()
+            self.log(f"My orders: {len(found)} of {len(todo)} RTDD(s) read from GOLD")
+            self._my_render()
+            if then and len(found) == len(todo):
+                then()
+            elif then:
+                messagebox.showwarning(APP_NAME, f"Only {len(found)} of the {len(todo)} RTDDs could be read, so "
+                                                 "nothing was sent. Try again.")
+        w.submit("Reading RTDDs", job, done)
+
+    def _my_send_overdue(self):
+        """The overdue orders into Revised Target Date, checked first: an order past its initial date may already
+        have a later RTDD, and then it is not overdue."""
+        if not self.my_time:
+            messagebox.showinfo(APP_NAME, "Get your orders first.")
+            return
+
+        def send():
+            orders = self._my_overdue()
+            if orders:
+                self._orders_to_rtdd(orders)
+            else:
+                messagebox.showinfo(APP_NAME, "No overdue orders - every open order is within its target date.")
+        self._my_check_rtdds(send)
+
     # --- loading (only when the user asks: "Get my orders" / Refresh)
     def _my_load(self, refresh=False, background=False):
         if self.busy:
@@ -1437,6 +1612,8 @@ class App(tk.Tk):
         self.my_orders, self.my_time = orders, time.time()
         self.log(f"My orders: {len(orders)} order(s) read from GOLD")
         self._my_render()
+        if not self.oa_orders and not self.oa_loading and OA_FILE.exists():  # its RTDDs save opening the orders
+            self._oa_read_file()
         self._my_changes(orders)
 
     # --- watching My orders for changes (Windows notifications)
@@ -1489,9 +1666,9 @@ class App(tk.Tk):
         if self.settings.get("digest_date") != str(today):
             self.settings["digest_date"] = str(today)
             save_settings(self.settings)
-            live = [o for o in orders if o.get("status") != "Closed" and o.get("ittd_date")]
-            late = sum(1 for o in live if o["ittd_date"] < today)
-            soon = sum(1 for o in live if 0 <= (o["ittd_date"] - today).days <= 7)
+            live = [o for o in orders if o.get("status") != "Closed" and o.get("target")]
+            late = sum(1 for o in live if o["target"] < today)
+            soon = sum(1 for o in live if 0 <= (o["target"] - today).days <= 7)
             if late or soon:
                 self._notify("Your orders today",
                              f"{late} past their target date, {soon} due within 7 days. Open My Orders for "
@@ -1499,6 +1676,8 @@ class App(tk.Tk):
 
     # --- drawing
     def _my_render(self):
+        gmo.apply_rtdd(self.my_orders, self._my_known_rtdds())
+        self.my_board.set_orders(self._my_live())
         s = gmo.summary(self.my_orders)
         loaded = self.my_time is not None
         if loaded:
@@ -1506,12 +1685,6 @@ class App(tk.Tk):
         else:
             self.my_empty.place(relx=0.5, rely=0.45, anchor="center")
         n = lambda v: str(v) if loaded else "-"
-        self.my_cards["total"].set(n(s["total"]), "in My orders" if loaded else "not loaded yet")
-        self.my_cards["open"].set(n(s["open"]), f"{s['closed']} closed" if loaded else "")
-        self.my_cards["due"].set(n(s["due_30"]), "target in 30 days" if loaded else "")
-        self.my_cards["late"].set(n(s["late"]), "still open" if loaded else "")
-        self.my_cards["customers"].set(n(s["customers"]), (s["by_customer"][0][0] if s["by_customer"] else "")
-                                       if loaded else "")
         # donut + legend
         items = [(k, v, self.STATUS_COLOURS.get(k, "#B0B7C0")) for k, v in s["by_status"]]
         self.my_donut.set(items, n(s["total"]), "orders")
@@ -1533,7 +1706,23 @@ class App(tk.Tk):
         top = s["by_customer"][:5]
         self.my_bars.set([(name, v, self.CUSTOMER_COLOURS[i % len(self.CUSTOMER_COLOURS)])
                           for i, (name, v) in enumerate(top)])
-        self._my_fill()
+        self._my_sliced()
+
+    def _my_cards(self, s):
+        loaded = self.my_time is not None
+        n = lambda v: str(v) if loaded else "-"
+        unchecked = len(self._my_unchecked())
+        self.my_cards["total"].set(n(s["total"]), "in My orders" if loaded else "not loaded yet")
+        self.my_cards["open"].set(n(s["open"]), f"{s['closed']} closed" if loaded else "")
+        self.my_cards["due"].set(n(s["due_30"]), "target in 30 days" if loaded else "")
+        self.my_cards["late"].set(n(s["late"]), f"{unchecked} to check" if unchecked else "RTDDs checked" if loaded
+                                  else "")
+        self.my_cards["customers"].set(n(s["customers"]), (s["by_customer"][0][0] if s["by_customer"] else "")
+                                       if loaded else "")
+        overdue = len(self._my_overdue())
+        self.my_send.configure(text=f"Send overdue to RTDD ({overdue})" if overdue else "Send overdue to RTDD")
+        self.my_rtdd_note.configure(text=f"{unchecked} past their initial date: RTDD not checked yet" if unchecked
+                                    else "")
 
     def _my_set_filter(self, **kw):
         self.my_filter.update(kw)
@@ -1547,6 +1736,7 @@ class App(tk.Tk):
     def _my_rows(self):
         f, today = self.my_filter, datetime.now().date()
         q = self.my_search.get().strip().lower()
+        picked = {o["order"] for o in self.my_board.chosen()} if self.my_board.selected else None
         out = []
         for o in self.my_orders:
             closed = o.get("status") == "Closed"
@@ -1556,7 +1746,9 @@ class App(tk.Tk):
                 continue
             if f["customer"] and o.get("customer") != f["customer"]:
                 continue
-            d = o.get("ittd_date")
+            if picked is not None and o["order"] not in picked:
+                continue
+            d = o.get("target")
             if f["when"] == "late" and not (d and d < today):
                 continue
             if f["when"] == "due30" and not (d and 0 <= (d - today).days <= 30):
@@ -1565,7 +1757,7 @@ class App(tk.Tk):
                 continue
             out.append(o)
         key, rev = self.my_sort_key
-        sort_val = (lambda o: o.get("ittd_date") or datetime.max.date()) if key == "target" else \
+        sort_val = (lambda o: o.get(key) or datetime.max.date()) if key in ("target", "rtdd") else \
             (lambda o: str(o.get(key, "")).lower())
         return sorted(out, key=sort_val, reverse=rev)
 
@@ -1574,15 +1766,16 @@ class App(tk.Tk):
         today = datetime.now().date()
         self.my_tree.delete(*self.my_tree.get_children())
         for i, o in enumerate(rows):
-            d = o.get("ittd_date")
+            d = o.get("target")
             late = d and d < today and o.get("status") != "Closed"
             tags = [o.get("status", "")] + (["late"] if late else []) + (["odd"] if i % 2 else [])
             self.my_tree.insert("", "end", iid=o["order"], tags=tags, values=(
                 o["order"], o.get("customer", ""), o.get("cust_site_ref", ""), "●  " + o.get("status", ""),
-                f"{d:%d-%b-%Y}" if d else "", o.get("service", ""), o.get("type", ""), o.get("orange_site_ref", "")))
+                f"{d:%d-%b-%Y}" if d else "", "?" if gas.rtdd_action(o) == gas.NOT_CHECKED else gas.fmt_date(o.get("rtdd")),
+                o.get("service", ""), o.get("type", ""), o.get("orange_site_ref", "")))
         f = self.my_filter
         parts = [p for p in (f["status"] and f"Status: {f['status']}", f["customer"] and f"Customer: {f['customer']}",
-                             {"late": "Past target date", "due30": "Due in 30 days"}.get(f["when"])) if p]
+                             {"late": "Overdue", "due30": "Due in 30 days"}.get(f["when"])) if p]
         if parts:
             self.my_chip.set("  ·  ".join(parts) + "   ✕")
             self.my_chip.pack(side="left", padx=(4, 0))
@@ -1634,13 +1827,15 @@ class App(tk.Tk):
             return
         path = Path(self._ctx()["workbook"]).parent / f"My_orders_{datetime.now():%Y-%m-%d_%H%M}.xlsx"
         cols = [("Order", "order"), ("Customer", "customer"), ("Cust. Site Ref", "cust_site_ref"),
-                ("Order Status", "status"), ("Service", "service"), ("Target date (iTTD)", "ittd_date"),
+                ("Order Status", "status"), ("Service", "service"), ("Initial target date (iTTD)", "ittd_date"),
+                ("RTDD", "rtdd"), ("Target date", "target"), ("Needs", "needs"),
                 ("Order Type", "type"), ("Orange Site Ref", "orange_site_ref"), ("Site Id", "site_id"),
                 ("BAN", "ban"), ("Sales Country", "sales_country"), ("Installed Offer Id", "installed_offer")]
         try:
             gx.write_sheet(path, "My orders", [f"Exported {datetime.now():%d-%b-%Y %H:%M}  ·  {len(rows)} orders"],
                            [("My orders", [c for c, _ in cols],
-                             [[(o.get(k).strftime("%d-%b-%Y") if k == "ittd_date" and o.get(k) else o.get(k, ""))
+                             [[gas.fmt_date(o.get(k)) if k in ("ittd_date", "rtdd", "target")
+                               else gas.rtdd_action(o) if k == "needs" else o.get(k, "")
                                for _, k in cols] for o in rows])])
         except PermissionError:
             messagebox.showerror(APP_NAME, f"{path.name} is open in Excel. Close it and try again.")
@@ -1904,6 +2099,8 @@ class App(tk.Tk):
         self.log(f"Order Assignment: {s['total']} open orders - {s['assigned']} with DPMs, "
                  f"{s['unassigned']} unassigned, {s['not_in_list']} with people not in the DPM list")
         self._oa_render()
+        if self.my_orders:
+            self._my_render()
 
     def _oa_reclassify(self):
         """The DPM list changed: sort the orders again."""
@@ -2078,8 +2275,16 @@ class App(tk.Tk):
         self._orders_to_grid(self.assign_grid, orders)
         self.log(f"{len(orders)} order(s) added to Bulk assignment - choose the DPM, then Run update.")
 
+    def _orders_to_rtdd(self, orders):
+        added = self._orders_to_grid(self.rtdd_grid, orders)
+        self.log(f"{added} order(s) added to Revised Target Date - add the dates and reasons, then Run update."
+                 + (f" {len(orders) - added} already there." if added < len(orders) else ""))
+
     def _orders_to_grid(self, g, orders):
-        """Put orders in the first empty rows of a bulk table and go to its page."""
+        """Put orders (those not there yet) in the first empty rows of a bulk table and go to its page.
+        Returns how many were added."""
+        there = {r["order"] for _, r in g.filled()}
+        orders = [o for o in orders if o not in there]
         empty = [i for i in g.rows() if not any(g.record(i).values())]
         if len(empty) < len(orders):
             g.add_rows(len(orders) - len(empty) + 5)
@@ -2087,6 +2292,7 @@ class App(tk.Tk):
         for iid, order in zip(empty, orders):
             g.set_value(iid, "order", order)
         self.notebook.select(g.master.master.master)
+        return len(orders)
 
     def _oa_menu(self, e):
         iid = self.oa_tree.identify_row(e.y)
@@ -2151,6 +2357,9 @@ class App(tk.Tk):
                          ("status", "Status", 72, "w"), ("ittd", "ITTD", 88, "w"), ("rtdd", "RTDD", 88, "w"),
                          ("days", "Days", 44, "e"), ("state", "RTDD status", 106, "w"), ("reason", "Reason", 60, "w"),
                          ("revenue", "€", 56, "e"), ("age", "Age", 42, "e"))
+    BOARD_STATUS = {gas.OVERDUE: RED, gas.DUE_14: gui.AMBER_FG, gas.NOT_OVERDUE: GREEN, gas.NO_DATE: gui.GREY_FG}
+    BOARD_REASONS = {"Customer": "#1F86E0", "Orange": "#FF7900", "MHS": "#8A3FB8", "Other": gui.GREY_FG,
+                     "Not revised": gui.GREY_FG, "Not checked": gui.GREY_FG}
     KPI_DUE_SOON = "Overdue + next 14 days"
     KPI_SHOWS = (KPI_DUE_SOON, gas.OVERDUE, gas.DUE_14, "Next 30 days", gas.NO_RTDD, gas.RTDD_PASSED, gas.NOT_OVERDUE,
                  gas.NO_DATE, "All orders")
@@ -2159,7 +2368,7 @@ class App(tk.Tk):
     def _build_kpi_tab(self, f):
         self.kpi_sort = ("overdue", True)
         self.kpi_order_sort = ("days", False)
-        self.kpi_pick = None  # (order field, value) of a row double-clicked in the tables
+        self.kpi_board = gb.Board(gas.order_dims, self._kpi_sliced)  # what was clicked in the charts and tables
         saved = self.settings.get("kpi_filters") or {}
 
         bar = tk.Frame(f, background=BG)
@@ -2202,7 +2411,7 @@ class App(tk.Tk):
                 ("ok", "Not overdue", "", "v_green", gas.NOT_OVERDUE),
                 ("no_rtdd", "No RTDD set", "", "v_purple", gas.NO_RTDD),
                 ("age", "Average order age", "", "v_teal", None))):
-            command = (lambda k=click: self._kpi_show_orders(k)) if click else (lambda: self._kpi_score_by("avg_age"))
+            command = lambda k=click: self._kpi_card(k)
             card = gui.StatCard(cards, caption, icon, palette, sub_lines=1, big_size=15, command=command)
             card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 12, 0))
             cards.columnconfigure(col, weight=1, uniform="kpicards")
@@ -2215,6 +2424,7 @@ class App(tk.Tk):
             ttk.Radiobutton(views, text=title, value=key, variable=self.kpi_view, style="SegSm.TRadiobutton",
                             command=self._kpi_view_changed).pack(side="left", padx=(0, 4))
         self.kpi_chip = gui.Pill(views, "", ORANGE_DARK, ORANGE_SOFT, bg=BG, command=self._kpi_clear)
+        self.kpi_slice_chip = gui.Pill(views, "", "white", RED, bg=BG, command=self.kpi_board.clear)
         self.kpi_info = tk.Label(views, text="", bg=BG, fg=MUTED, font=(FONT, 9))
         self.kpi_info.pack(side="right")
 
@@ -2234,6 +2444,10 @@ class App(tk.Tk):
         self._btn(self.kpi_empty, "↓  Get the latest orders", lambda: self._oa_load(force=True),
                   "Accent.TButton").pack()
         self._kpi_render()
+
+    @staticmethod
+    def _board_due_colours():
+        return dict({"Overdue": RED}, **{week: ORANGE for week in gas.week_labels()})
 
     def _kpi_table(self, parent, columns, stretch, sort=None, selectmode="browse"):
         """A table with its scrollbar, red / amber rows and headings that call sort(column)."""
@@ -2255,43 +2469,42 @@ class App(tk.Tk):
         return t
 
     def _build_kpi_overview(self, f):
-        for row in (0, 1):
-            f.rowconfigure(row, weight=1, uniform="kpirows")
-        for col in (0, 1, 2):
-            f.columnconfigure(col, weight=1, uniform="kpicols")
-
-        def tile(row, col, title, icon):
-            t = self._tile(f)
-            t.grid(row=row, column=col, sticky="nsew", padx=(12 if col else 0, 0), pady=(12 if row else 0, 0))
-            self._tile_head(t.body, title, icon)
-            return t.body
-
-        b = tile(0, 0, "RTDD status", "")
-        row = tk.Frame(b, background=CARD)
-        row.pack(fill="x")
-        self.kpi_donut = gui.Donut(row)
-        self.kpi_donut.pack(side="left", padx=(0, 14))
-        self.kpi_legend = tk.Frame(row, background=CARD)
-        self.kpi_legend.pack(side="left", fill="x", expand=True)
-        b = tile(0, 1, "When orders fall due", "")
-        self.kpi_ahead = gui.Bars(b, rows=6)
-        self.kpi_ahead.pack(fill="x")
-        self.kpi_later = tk.Label(b, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w")
+        f, height = self._board_area(f)
+        b = self.kpi_board
+        tile = lambda row, col, title, icon: self._board_tile(f, height, row, col, title, icon)
+        money = lambda k, orders: gas.money(sum(gas._number(o.get("revenue")) or 0 for o in orders))
+        b.donut(tile(0, 0, "RTDD status", "\uEB05"), "status", self.BOARD_STATUS, note=money)
+        body = tile(0, 1, "When orders fall due", "\uE787")
+        b.bars(body, "due", self._board_due_colours(), values=["Overdue"] + gas.week_labels())
+        self.kpi_later = tk.Label(body, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w")
         self.kpi_later.pack(fill="x")
-        self.kpi_reasons = gui.Bars(tile(0, 2, "Why RTDDs moved", ""), rows=5)
-        self.kpi_reasons.pack(fill="x")
-        self.kpi_ages = gui.Bars(tile(1, 0, "Order age", ""), rows=5)
-        self.kpi_ages.pack(fill="x")
+        body = tile(0, 2, "Why RTDDs moved", "\uE8BD")
+        b.bars(body, "reason", self.BOARD_REASONS, rows=5, values=("Customer", "Orange", "MHS", "Not revised"))
+        self.kpi_slip = tk.Label(body, text="", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w")
+        self.kpi_slip.pack(fill="x")
+        late = [name for name, _ in gas.LATE_BANDS]
+        b.bars(tile(1, 0, "How late the overdue orders are", "\uE7BA"), "late",
+               dict(zip(late, ("#F5C451", "#F59E0B", "#EF6C4D", RED))), rows=4, values=late)
+        b.bars(tile(1, 1, "Order stage", "\uE9D2"), "stage", self.STATUS_COLOURS)
+        b.bars(tile(1, 2, "Order type", "\uE8A5"), "type", {"New": "#22C55E", "Change": "#38BDF8",
+                                                            "Disconnect": "#94A3B8"}, rows=3)
+        ages = [name for name, _ in gas.AGE_BANDS]
+        b.bars(tile(2, 0, "Order age", "\uE823"), "age", dict(zip(ages, (GREEN, GREEN, GREEN, gui.AMBER_FG, RED))),
+               rows=5, values=ages)
+        b.bars(tile(2, 1, "Top products", "\uE7B8"), "service", "#8A3FB8")
+        b.bars(tile(2, 2, "Top countries", "\uE774"), "country", "#128577")
 
-        b = tile(1, 1, "Biggest customers", "")
-        self.kpi_top = self._kpi_table(b, (("customer", "Customer", 120, "w"), ("open", "Orders", 52, "e"),
-                                           ("late", "Late", 40, "e"), ("rev", "€", 56, "e")), ("customer",))
-        self.kpi_top.bind("<Double-1>", lambda e: self._kpi_drill("customer", self.kpi_top))
-
-        b = tile(1, 2, "By manager", "")
-        self.kpi_mgr = self._kpi_table(b, (("manager", "Manager", 110, "w"), ("dpms", "DPMs", 46, "e"),
-                                           ("open", "Orders", 52, "e"), ("late", "% late", 52, "e")), ("manager",))
-        self.kpi_mgr.bind("<<TreeviewSelect>>", lambda e: self._kpi_manager_picked())
+        self.kpi_top = self._kpi_table(tile(3, 0, "Biggest customers", "\uE731"),
+                                       (("customer", "Customer", 110, "w"), ("open", "Orders", 58, "e"),
+                                        ("late", "Late", 42, "e"), ("rev", "€", 58, "e")), ("customer",))
+        self.kpi_mgr = self._kpi_table(tile(3, 1, "By manager", "\uE716"),
+                                       (("manager", "Manager", 100, "w"), ("dpms", "DPMs", 52, "e"),
+                                        ("open", "Orders", 58, "e"), ("late", "% late", 54, "e")), ("manager",))
+        self.kpi_busy = self._kpi_table(tile(3, 2, "Most overdue DPMs", "\uE7BA"),
+                                        (("dpm", "DPM", 100, "w"), ("open", "Orders", 58, "e"),
+                                         ("late", "Late", 42, "e"), ("no_rtdd", "No RTDD", 70, "e")), ("dpm",))
+        for tree, dim in ((self.kpi_top, "customer"), (self.kpi_mgr, "manager"), (self.kpi_busy, "dpm")):
+            tree.bind("<ButtonRelease-1>", lambda e, t=tree, d=dim: self._kpi_table_click(e, t, d))
 
     def _build_kpi_score(self, f):
         t = self._tile(f, fill="both", expand=True)
@@ -2321,8 +2534,9 @@ class App(tk.Tk):
         cb.bind("<<ComboboxSelected>>", lambda e: self._kpi_fill())
         self.kpi_due_info = tk.Label(head, text="", bg=CARD, fg=MUTED, font=(FONT, 9))
         self.kpi_due_info.pack(side="left", padx=(10, 0))
-        self._btn(head, "Update RTDD", self._kpi_to_rtdd, "Small.TButton").pack(side="right")
-        tk.Label(head, text="select orders, then", bg=CARD, fg=FAINT, font=(FONT, 8)).pack(side="right", padx=6)
+        self._btn(head, "Send to RTDD", self._kpi_to_rtdd, "Small.TButton").pack(side="right")
+        tk.Label(head, text="the selected orders, or all of them", bg=CARD, fg=FAINT, font=(FONT, 8)).pack(side="right",
+                                                                                                         padx=6)
         self.kpi_due = self._kpi_table(t.body, self.KPI_ORDER_COLUMNS, ("customer", "dpm"), self._kpi_order_sort_by,
                                        "extended")
         self.kpi_due_copy = gui.TableCopy(self.kpi_due, self.log)
@@ -2333,16 +2547,15 @@ class App(tk.Tk):
                  font=(FONT, 8), anchor="w").pack(fill="x", pady=(6, 0))
 
     def _kpi_orders(self):
-        """The assigned orders in the filters (and the row double-clicked in a table)."""
+        """The assigned orders in the filters."""
         region, manager, cluster = self.kpi_region.get(), self.kpi_manager.get(), self.kpi_cluster.get()
-        dpm, q, pick = self.kpi_dpm.get().strip(), self.kpi_q.get().strip().lower(), self.kpi_pick
+        dpm, q = self.kpi_dpm.get().strip(), self.kpi_q.get().strip().lower()
         out = []
         for o in self.oa_orders:
             if o["category"] != gas.ASSIGNED or (region != "All regions" and o["region"] != region) \
                     or (manager != self.ALL_MANAGERS and o.get("manager") != manager) \
                     or (cluster != "All clusters" and o.get("cluster") != cluster) \
-                    or (dpm and o["dpm"] != dpm and not gn.matches(o["dpm"], dpm)) \
-                    or (pick and (o.get(pick[0]) or "") != pick[1]):
+                    or (dpm and o["dpm"] != dpm and not gn.matches(o["dpm"], dpm)):
                 continue
             if q and q not in " ".join(str(o.get(k) or "") for k in (
                     "order", "customer", "end_customer", "service", "project")).lower():
@@ -2392,7 +2605,16 @@ class App(tk.Tk):
                         key=str.lower)
         self.kpi_dpm_cb.configure(values=[n for n in people if not typed or gn.matches(n, typed)])
 
-        orders = self.kpi_shown = self._kpi_orders()
+        self.kpi_board.set_orders(self._kpi_orders())
+        self._kpi_sliced()
+
+    def _kpi_sliced(self):
+        """The filters or a click on a chart changed: the cards, then the view."""
+        loaded = bool(self.oa_time)
+        board = self.kpi_board
+        if "status" in board.selected or "action" in board.selected:  # Orders due must not hide what was clicked
+            self.kpi_show.set("All orders")
+        orders = self.kpi_shown = board.chosen()
         t = gas.kpi_total(orders)
         n = t["open"]
         share = lambda v: f"{gas.money(t[v + '_rev'])}  ·  {t[v] * 100 // max(n, 1)}%" if loaded else ""
@@ -2410,14 +2632,14 @@ class App(tk.Tk):
                              f"manager {self.kpi_manager.get()}" if self.kpi_manager.get() != self.ALL_MANAGERS
                              else "", self.kpi_dpm.get().strip(),
                              self.kpi_cluster.get() if self.kpi_cluster.get() != "All clusters" else "",
-                             self.kpi_pick[1] if self.kpi_pick else "",
                              f"“{self.kpi_q.get().strip()}”" if self.kpi_q.get().strip() else "") if p]
-        self.kpi_filter_text = ", ".join(parts)
-        if parts:
-            self.kpi_chip.set("  ·  ".join(parts) + "   ✕")
-            self.kpi_chip.pack(side="left", padx=(12, 0))
-        else:
-            self.kpi_chip.pack_forget()
+        self.kpi_filter_text = ", ".join(parts + list(board.selected.values()))
+        for chip, text in ((self.kpi_chip, "  ·  ".join(parts)), (self.kpi_slice_chip, board.text())):
+            if text:
+                chip.set(text + "   ✕")
+                chip.pack(side="left", padx=(12, 0))
+            else:
+                chip.pack_forget()
         when = datetime.fromtimestamp(self.oa_time).strftime("%d-%b %H:%M") if loaded else ""
         self.kpi_info.configure(text=f"sheet refreshed {when}" if loaded else "")
         self._kpi_fill()
@@ -2432,55 +2654,48 @@ class App(tk.Tk):
             self._kpi_fill_due()
 
     def _kpi_fill_overview(self):
-        orders, t = self.kpi_shown, gas.kpi_total(self.kpi_shown)
-        items = [(gas.OVERDUE, t["overdue"], RED), (gas.DUE_14, t["due14"], gui.AMBER_FG),
-                 (gas.NOT_OVERDUE, t["ok"], GREEN), (gas.NO_DATE, t["no_date"], gui.GREY_FG)]
-        self.kpi_donut.set(items, f"{t['open']:,}" if self.oa_time else "-", "orders")
-        for w in self.kpi_legend.winfo_children():
-            w.destroy()
-        money = {gas.OVERDUE: t["overdue_rev"], gas.DUE_14: t["due14_rev"], gas.NOT_OVERDUE: t["ok_rev"]}
-        for k, v, colour in items:
-            r = tk.Frame(self.kpi_legend, background=CARD, cursor="hand2")
-            r.pack(fill="x", pady=1)
-            dot = tk.Label(r, text="●", bg=CARD, fg=colour, font=(FONT, 11))
-            dot.pack(side="left", anchor="n")
-            text = tk.Frame(r, background=CARD)
-            text.pack(side="left", padx=(4, 0), fill="x", expand=True)
-            name = tk.Label(text, text=k, bg=CARD, fg=INK, font=(FONT, 9), anchor="w")
-            name.pack(fill="x")
-            value = f"{v:,}" + (f"  ·  {gas.money(money[k])}" if k in money else "")
-            right = tk.Label(text, text=value, bg=CARD, fg=MUTED, font=(FONT, 8, "bold"), anchor="w")
-            right.pack(fill="x")
-            for w in (r, dot, text, right, name):
-                w.bind("<Button-1>", lambda e, k=k: self._kpi_show_orders(k))
-        ahead = gas.due_ahead(orders, weeks=5)
-        self.kpi_ahead.set([(k, v, RED if k == "Overdue" else ORANGE) for k, v in ahead[:-1]])
-        self.kpi_later.configure(text=f"{ahead[-1][1]:,} more after that" if self.oa_time else "")
-        colours = {"Customer": "#1F86E0", "Orange": "#FF7900", "MHS": "#8A3FB8", "Other": gui.GREY_FG,
-                   "Not revised": gui.GREY_FG}
-        self.kpi_reasons.set([(k, v, colours[k]) for k, v in gas.rtdd_reasons(orders)])
-        ages = gas.age_bands(orders)
-        self.kpi_ages.set([(k, v, RED if i == len(ages) - 1 else gui.AMBER_FG if i == len(ages) - 2 else GREEN)
-                           for i, (k, v) in enumerate(ages)])
+        board = self.kpi_board
+        board.refresh()
+        later = sum(1 for o in board.without("due") if gas.due_week(o) == "Later")
+        self.kpi_later.configure(text=f"{later:,} more after that" if self.oa_time else "")
+        slip = gas.average_slip(board.without("reason"))
+        self.kpi_slip.configure(text=f"Revised orders moved {slip} days on average" if slip is not None else "")
 
-        top = sorted(gas.dpm_kpis(orders, by="customer"), key=lambda r: -r["revenue"])[:50]
-        m = self.kpi_top
-        m.delete(*m.get_children())
-        for i, r in enumerate(top):
-            m.insert("", "end", iid=r["name"] or "-", tags=["odd"] if i % 2 else [], values=(
-                r["name"], r["open"], r["overdue"] or "", gas.money(r["revenue"])))
-        # by manager: every manager in the Region filter, so another one can be picked
-        region = self.kpi_region.get()
-        everyone = gas.dpm_kpis([o for o in self.oa_orders if o["category"] == gas.ASSIGNED
-                                 and (region == "All regions" or o["region"] == region)], by="manager")
-        m = self.kpi_mgr
-        m.delete(*m.get_children())
-        for i, r in enumerate(sorted(everyone, key=lambda r: (-r["open"], r["name"].lower()))):
-            tags = [self._kpi_level(r["overdue_pct"], r["overdue"])] + (["odd"] if i % 2 else [])
-            m.insert("", "end", iid=r["name"] or "-", tags=[x for x in tags if x], values=(
-                r["name"] or "(not known)", r["dpms"], r["open"], f"{r['overdue_pct']}%"))
-        if self.kpi_manager.get() != self.ALL_MANAGERS and m.exists(self.kpi_manager.get()):
-            m.selection_set(self.kpi_manager.get())
+        def fill(tree, dim, rows, values):
+            tree.delete(*tree.get_children())
+            picked = board.selected.get(dim)
+            for i, r in enumerate(rows):
+                tags = [self._kpi_level(r["overdue_pct"], r["overdue"])] + (["odd"] if i % 2 else [])
+                tree.insert("", "end", iid=r["name"] or "-", tags=[x for x in tags if x], values=values(r))
+            if picked is not None and tree.exists(picked or "-"):
+                tree.selection_set(picked or "-")
+                tree.see(picked or "-")
+
+        rows = gas.dpm_kpis(board.without("customer"), by="customer")
+        fill(self.kpi_top, "customer", sorted(rows, key=lambda r: -r["revenue"])[:50],
+             lambda r: (r["name"], r["open"], r["overdue"] or "", gas.money(r["revenue"])))
+        rows = gas.dpm_kpis(board.without("manager"), by="manager")
+        fill(self.kpi_mgr, "manager", sorted(rows, key=lambda r: (-r["open"], r["name"].lower())),
+             lambda r: (r["name"] or "(not known)", r["dpms"], r["open"], f"{r['overdue_pct']}%"))
+        rows = gas.dpm_kpis(board.without("dpm"))
+        fill(self.kpi_busy, "dpm", rows[:50], lambda r: (r["name"], r["open"], r["overdue"] or "", r["no_rtdd"] or ""))
+
+    def _kpi_table_click(self, e, tree, dim):
+        iid = tree.identify_row(e.y)
+        if iid:
+            self.kpi_board.toggle(dim, "" if iid == "-" else iid)
+
+    def _kpi_card(self, what):
+        """A card works like its slice of the charts."""
+        board = self.kpi_board
+        if what is None:
+            self._kpi_score_by("avg_age")
+        elif what == "All orders":
+            board.clear()
+        elif what == gas.NO_RTDD:
+            board.toggle("action", what)
+        else:
+            board.toggle("status", what)
 
     def _kpi_group_key(self):
         return dict(self.KPI_GROUPS)[self.kpi_group.get()]
@@ -2570,12 +2785,6 @@ class App(tk.Tk):
         self.kpi_order_sort = (col, not rev if key == col else col in ("revenue", "age"))  # biggest first
         self._kpi_fill_due()
 
-    def _kpi_show_orders(self, show):
-        """Open the Orders due view on one kind of order."""
-        self.kpi_show.set(show)
-        self.kpi_view.set("orders")
-        self._kpi_view_changed()
-
     def _kpi_level(self, pct, overdue):
         if overdue and pct >= self.KPI_LATE_RED:
             return "red"
@@ -2589,30 +2798,19 @@ class App(tk.Tk):
         self.kpi_dpm.set("")
         self.kpi_cluster.set("All clusters")
         self.kpi_q.set("")
-        self.kpi_pick = None
         self._kpi_changed()
 
-    def _kpi_manager_picked(self):
-        sel = self.kpi_mgr.selection()
-        if sel and sel[0] != "-" and sel[0] != self.kpi_manager.get():
-            self.kpi_manager.set(sel[0])
-            self._kpi_changed()
-
-    def _kpi_drill(self, by, tree):
+    def _kpi_score_open(self):
         """Double-click on a row: the orders of that DPM, manager, customer..."""
-        sel = tree.selection()
+        sel = self.kpi_tree.selection()
         if not sel:
             return
-        self.kpi_pick = (by, "" if sel[0] == "-" else sel[0])
         self.kpi_show.set("All orders")
         self.kpi_view.set("orders")
         for frame in self.kpi_frames.values():
             frame.pack_forget()
         self.kpi_frames["orders"].pack(fill="both", expand=True)
-        self._kpi_render()
-
-    def _kpi_score_open(self):
-        self._kpi_drill(self._kpi_group_key(), self.kpi_tree)
+        self.kpi_board.choose(self._kpi_group_key(), "" if sel[0] == "-" else sel[0])
 
     def _kpi_due_selected(self):
         return list(dict.fromkeys(self.kpi_due.set(i, "order") for i in self.kpi_due.selection()))
@@ -2623,13 +2821,14 @@ class App(tk.Tk):
             self._my_open(orders[0])
 
     def _kpi_to_rtdd(self):
-        """Put the selected orders in Update RTDD, ready for their new dates."""
+        """Put the selected orders (none selected: all those shown) in Revised Target Date, ready for their dates."""
         orders = self._kpi_due_selected()
         if not orders:
-            messagebox.showinfo(APP_NAME, "Select the orders to update first (Ctrl or Shift to pick several).")
-            return
-        self._orders_to_grid(self.rtdd_grid, orders)
-        self.log(f"{len(orders)} order(s) added to Revised Target Date - add the dates and reasons, then Run update.")
+            orders = list(dict.fromkeys(self.kpi_due.set(i, "order") for i in self.kpi_due.get_children()))
+            if not orders or not messagebox.askyesno(APP_NAME, f"Send all {len(orders)} orders shown to Revised "
+                                                               "Target Date?"):
+                return
+        self._orders_to_rtdd(orders)
 
     def _kpi_due_menu(self, e):
         iid = self.kpi_due.identify_row(e.y)
@@ -2640,7 +2839,7 @@ class App(tk.Tk):
         n = len(self.kpi_due.selection())
         m = tk.Menu(self, tearoff=0)
         m.add_command(label="Open in Order explorer", command=lambda: self._my_open(self.kpi_due.set(iid, "order")))
-        m.add_command(label=f"Update RTDD - {n} order(s)", command=self._kpi_to_rtdd)
+        m.add_command(label=f"Send to RTDD - {n} order(s)", command=self._kpi_to_rtdd)
         m.add_separator()
         cell = self.kpi_due_copy._cell_at(e)
         self.kpi_due_copy.add_items(m, *(cell or (iid, None)))
@@ -2651,7 +2850,7 @@ class App(tk.Tk):
         if not self.oa_time:
             return
         import gold_assign_dashboard as gad
-        orders = self._kpi_orders()
+        orders = self.kpi_shown
         dpm_rows = gas.dpm_kpis(orders)
         if not dpm_rows:
             return
@@ -2667,6 +2866,40 @@ class App(tk.Tk):
         self.log(f"DPM dashboard saved: {path}")
         if messagebox.askyesno(APP_NAME, f"DPM dashboard ({len(dpm_rows)} DPMs) saved to\n{path}\n\nOpen it now?"):
             os.startfile(path)
+
+    def _board_area(self, parent):
+        """A scrolling page for rows of chart tiles; returns (frame to grid the tiles in, tile height)."""
+        cv = tk.Canvas(parent, background=BG, highlightthickness=0, borderwidth=0)
+        bar = ttk.Scrollbar(parent, orient="vertical", command=cv.yview)
+        cv.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        cv.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(cv, background=BG)
+        win = cv.create_window(0, 0, window=inner, anchor="nw")
+        cv.bind("<Configure>", lambda e: cv.itemconfigure(win, width=e.width - 10))
+        inner.bind("<Configure>", lambda e: cv.configure(scrollregion=(0, 0, e.width, e.height)))
+
+        def wheel(e):
+            w = e.widget if isinstance(e.widget, tk.Misc) else None
+            if isinstance(w, ttk.Treeview):  # a table scrolls itself
+                return
+            while w is not None and w is not cv:
+                w = getattr(w, "master", None)
+            if w is cv:
+                cv.yview_scroll(int(-e.delta / 120), "units")
+        cv.bind_all("<MouseWheel>", wheel, add="+")
+        for col in (0, 1, 2):
+            inner.columnconfigure(col, weight=1, uniform="boardcols")
+        line = tkfont.Font(family=FONT, size=9).metrics("linespace")
+        return inner, (line + 16) * 6 + line * 3 + 66
+
+    def _board_tile(self, f, height, row, col, title, icon):
+        """A chart tile at (row, col) of a _board_area; returns its body."""
+        f.rowconfigure(row, minsize=height)
+        t = self._tile(f)
+        t.grid(row=row, column=col, sticky="nsew", padx=(12 if col else 0, 0), pady=(12 if row else 0, 0))
+        self._tile_head(t.body, title, icon)
+        return t.body
 
     def _tile_head(self, parent, title, icon):
         """A tile's title row (icon + bold title); returns the row so buttons can go on its right."""
@@ -3530,6 +3763,8 @@ class App(tk.Tk):
                 "Confirm GOLD update", f"Add the milestone\n\n    {title}\n\nto {len(items)} order(s) in GOLD, "
                                        "each with its Date (and Reason, where given)?\n\nThis saves in GOLD."):
             return
+        if not dry:  # these orders' RTDDs are changing: My Orders reads them again
+            self._my_forget_rtdds([it[1][0] for it in items])
         choice = {}  # 'Set all' / 'Skip all' for earlier dates, for this run
 
         def confirm(order, warning):

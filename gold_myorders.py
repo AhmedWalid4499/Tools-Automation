@@ -1,5 +1,8 @@
 """My Orders: the orders GOLD lists for you (Orders > 'My orders only'), read from every result page.
 
+GOLD's list has only the initial target date: an order past it may well have a Revised Target Date, so
+apply_rtdd() adds the RTDDs known from elsewhere (the APM sheet, or the order's milestones).
+
 Read-only. GOLD's results page carries every row's details in its own script
 (_grid_setupDetails(<names>) and one _grid_addDetail('detail_..', <values>) per order); we read those, so
 nothing depends on the grid being drawn. Each order: order, type, customer, ban, orange_site_ref,
@@ -116,6 +119,21 @@ def read_my_orders(driver, wait, log=print):
                 pass
 
 
+def apply_rtdd(orders, known, today=None):
+    """Add to each order what the dashboards need, from known = {order: {"rtdd": date or None, "reason": text}}:
+    rtdd, rtdd_reason, rtdd_known, target (the later of the RTDD and the initial date, as GOLD's reports count
+    it) and due_days."""
+    today = today or date.today()
+    for o in orders:
+        k = known.get(o["order"])
+        rtdd = k["rtdd"] if k else None
+        dates = [d for d in (rtdd, o.get("ittd_date")) if d]
+        target = max(dates) if dates else None
+        o.update(rtdd=rtdd, rtdd_reason=k["reason"] if k else "", rtdd_known=k is not None, target=target,
+                 ittd=o.get("ittd_date"), due_days=(target - today).days if target else None)
+    return orders
+
+
 def summary(orders):
     """Counts for the dashboard."""
     by_status, by_customer, by_type = {}, {}, {}
@@ -126,14 +144,15 @@ def summary(orders):
     order = {s: i for i, s in enumerate(STATUSES)}
     today = date.today()
     live = [o for o in orders if o.get("status") != "Closed"]
+    target = lambda o: o.get("target") or o.get("ittd_date")
     return {"total": len(orders),
             "open": len(live),
             "closed": by_status.get("Closed", 0),
             "on_hold": by_status.get("On-Hold", 0),
-            # target date (iTTD) passed / within 30 days, for orders not closed
-            "late": sum(1 for o in live if o.get("ittd_date") and o["ittd_date"] < today),
-            "due_30": sum(1 for o in live if o.get("ittd_date") and 0 <= (o["ittd_date"] - today).days <= 30),
-            "upcoming": sorted((o for o in live if o.get("ittd_date")), key=lambda o: o["ittd_date"]),
+            # target date (the RTDD, else iTTD) passed / within 30 days, for orders not closed
+            "late": sum(1 for o in live if target(o) and target(o) < today),
+            "due_30": sum(1 for o in live if target(o) and 0 <= (target(o) - today).days <= 30),
+            "upcoming": sorted((o for o in live if target(o)), key=target),
             "customers": len(by_customer),
             "by_status": sorted(by_status.items(), key=lambda kv: order.get(kv[0], 99)),
             "by_customer": sorted(by_customer.items(), key=lambda kv: -kv[1]),

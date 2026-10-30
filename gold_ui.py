@@ -4,6 +4,7 @@ stat cards, chat bubbles, and rounded buttons / fields / selectors / checkboxes 
 Tkinter draws only square shapes, so every rounded or gradient surface is an image (Pillow), redrawn
 when its size changes.
 """
+import math
 import tkinter as tk
 import weakref
 from pathlib import Path
@@ -501,13 +502,33 @@ class Donut(tk.Canvas, _Redraw):
         size = size or int(self.f_big.metrics("linespace") * 3.9)  # room for the centre text at any scaling
         super().__init__(parent, width=size, height=size, background=bg, highlightthickness=0, borderwidth=0)
         self.items, self.big, self.small, self.thickness = [], "", "", thickness
+        self.selected, self.on_click = None, on_click
         self._img = None
         self._watch()
+        if on_click:
+            self.configure(cursor="hand2")
+            self.bind("<Button-1>", self._clicked)
 
-    def set(self, items, big="", small=""):
+    def set(self, items, big="", small="", selected=None):
         self.items, self.big, self.small = [i for i in items if i[1] > 0], big, small
+        self.selected = selected
         if self._size:
             self.redraw(*self._size)
+
+    def _clicked(self, e):
+        """Which slice of the ring was clicked (the hole is not a slice)."""
+        w, h = self.winfo_width(), self.winfo_height()
+        dx, dy = e.x - w / 2, e.y - h / 2
+        outer = (min(w, h) - 4) / 2
+        if not outer * (1 - 2 * self.thickness) <= math.hypot(dx, dy) <= outer:
+            return
+        angle = (math.degrees(math.atan2(dy, dx)) + 90) % 360
+        total = sum(v for _, v, _ in self.items)
+        for label, v, _ in self.items:
+            angle -= 360.0 * v / max(total, 1)
+            if angle < 0:
+                self.on_click(label)
+                return
 
     def redraw(self, w, h):
         d = min(w, h) - 4
@@ -520,8 +541,10 @@ class Donut(tk.Canvas, _Redraw):
         else:
             start = -90.0
             gap = 1.2 if len(self.items) > 1 else 0
-            for _, v, colour in self.items:
+            for label, v, colour in self.items:
                 sweep = 360.0 * v / total
+                if self.selected is not None and label != self.selected:
+                    colour = mix(colour, TRACK, 0.72)
                 dr.pieslice((0, 0, d * s - 1, d * s - 1), start + gap / 2, start + sweep - gap / 2, fill=colour)
                 start += sweep
         hole = d * s * self.thickness
@@ -547,13 +570,13 @@ class Bars(tk.Canvas, _Redraw):
         self.f_value = tkfont.Font(family=FONT, size=9, weight="bold")
         self.row_h = self.f_label.metrics("linespace") + 16
         super().__init__(parent, height=self.row_h * rows, background=bg, highlightthickness=0, borderwidth=0)
-        self.items, self.on_click, self._imgs = [], on_click, []
+        self.items, self.on_click, self._imgs, self.selected = [], on_click, [], None
         self._watch()
         if on_click:
             self.bind("<Button-1>", self._clicked)
 
-    def set(self, items):
-        self.items = list(items)
+    def set(self, items, selected=None):
+        self.items, self.selected = list(items), selected
         if self._size:
             self.redraw(*self._size)
 
@@ -573,12 +596,14 @@ class Bars(tk.Canvas, _Redraw):
         bh = max(8, self.row_h - 18)
         for i, (label, value, colour) in enumerate(self.items):
             y = i * self.row_h + self.row_h // 2
+            if self.selected is not None and label != self.selected:
+                colour = mix(colour, TRACK, 0.72)
             self.create_text(0, y, text=fit_text(label, self.f_label, label_w - 8, 1), anchor="w", fill=INK,
                              font=self.f_label)
             track = ImageTk.PhotoImage(rounded_image(bar_w, bh, bh // 2, TRACK))
             self._imgs.append(track)
             self.create_image(label_w, y, image=track, anchor="w")
-            bw = max(bh, int(bar_w * value / top))
+            bw = max(bh, int(bar_w * max(value, 0) / top))
             bar = ImageTk.PhotoImage(rounded_image(bw, bh, bh // 2, colour))
             self._imgs.append(bar)
             self.create_image(label_w, y, image=bar, anchor="w")

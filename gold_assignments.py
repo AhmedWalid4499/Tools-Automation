@@ -44,6 +44,10 @@ COLUMNS = {"order": "Order Number", "status": "Order Status", "type": "Order Typ
 ASSIGNED, UNASSIGNED, NOT_IN_LIST = "Assigned", "Unassigned", "Not in DPM list"
 OVERDUE, DUE_14, NOT_OVERDUE, NO_DATE = "Overdue RTDD", "Overdue in 14 days", "Not Overdue", "No date"  # the sheet's
 NO_RTDD, RTDD_PASSED = "No RTDD set", "RTDD date passed"  # what an overdue order needs   # Backlog column
+NOT_CHECKED = "RTDD not checked"  # My Orders: past its initial date, and its RTDD has not been read yet
+AGE_BANDS = (("Under 3 months", 91), ("3-6 months", 183), ("6-12 months", 366), ("1-2 years", 731),
+             ("Over 2 years", None))
+LATE_BANDS = (("1-30 days", 31), ("31-90 days", 91), ("91-180 days", 181), ("Over 180 days", None))
 NO_TEAM = "No team"  # a DPM-list name without a team (add it in DPM names > Edit, or import the teams)
 REGIONS = {team: dept for dept, team in gn.TEAMS.items()}  # "DPM Egypt" -> "APM Europe"
 
@@ -228,9 +232,11 @@ def is_overdue(o):
 
 
 def rtdd_action(o):
-    """What an overdue order needs from its DPM: NO_RTDD (never revised) or RTDD_PASSED (revised, and that date
-    has passed too). "" for the others."""
-    return "" if not is_overdue(o) else RTDD_PASSED if o.get("rtdd") else NO_RTDD
+    """What an overdue order needs from its DPM: NO_RTDD (never revised), RTDD_PASSED (revised, and that date
+    has passed too) or NOT_CHECKED (not known yet). "" for the others."""
+    if not is_overdue(o):
+        return ""
+    return RTDD_PASSED if o.get("rtdd") else NOT_CHECKED if o.get("rtdd_known") is False else NO_RTDD
 
 
 def rtdd_reason(o):
@@ -318,43 +324,48 @@ def kpi_total(orders):
     return (dpm_kpis(orders, by=None) or [_blank_kpi("Total")])[0]
 
 
-def due_ahead(orders, weeks=4):
-    """When the open orders fall due: [("Overdue", n), ("w/c 02-Nov", n)..., ("Later", n)], weeks from this one."""
+def _band(value, bands):
+    return next(name for name, top in bands if top is None or value < top)
+
+
+def week_labels(weeks=5):
+    """The weeks of the 'When orders fall due' chart: this one first."""
     monday = date.today() - timedelta(days=date.today().weekday())
-    counts = [0] * (weeks + 1)
-    overdue = 0
-    for o in orders:
-        status, d = rtdd_status(o), days_left(o)
-        if status == OVERDUE:
-            overdue += 1
-        elif d is not None:
-            week = max(((date.today() + timedelta(days=d)) - monday).days // 7, 0)
-            counts[min(week, weeks)] += 1
-    return ([("Overdue", overdue)] + [(f"w/c {monday + timedelta(weeks=i):%d-%b}", counts[i]) for i in range(weeks)]
-            + [("Later", counts[weeks])])
+    return [f"w/c {monday + timedelta(weeks=i):%d-%b}" for i in range(weeks)]
 
 
-def age_bands(orders):
-    """Open orders by age: [(band, n)], youngest first."""
-    bands = (("Under 3 months", 91), ("3-6 months", 183), ("6-12 months", 366), ("1-2 years", 731),
-             ("Over 2 years", None))
-    counts = [0] * len(bands)
-    for o in orders:
-        age = _number(o.get("age"))
-        if age is not None:
-            counts[next(i for i, (_, top) in enumerate(bands) if top is None or age < top)] += 1
-    return [(b[0], n) for b, n in zip(bands, counts)]
+def due_week(o, weeks=5):
+    """When the order falls due: "Overdue", "w/c 02-Nov" (one of week_labels), "Later", or "" without a date."""
+    if is_overdue(o):
+        return "Overdue"
+    d = days_left(o)
+    if d is None:
+        return ""
+    monday = date.today() - timedelta(days=date.today().weekday())
+    week = max(((date.today() + timedelta(days=d)) - monday).days // 7, 0)
+    return week_labels(weeks)[week] if week < weeks else "Later"
 
 
-def rtdd_reasons(orders):
-    """Whose reason moved the orders' dates: [(who, n)] for the orders with an RTDD, then those never revised."""
-    counts = {"Customer": 0, "Orange": 0, "MHS": 0, "Other": 0}
-    for o in orders:
-        if o.get("rtdd"):
-            who = rtdd_reason(o)[0] or "Other"
-            counts[who] += 1
-    items = [(k, v) for k, v in counts.items() if v or k != "Other"]
-    return items + [("Not revised", sum(1 for o in orders if not o.get("rtdd")))]
+def order_dims(o):
+    """What the dashboards' charts can filter on, for one order."""
+    late = days_left(o)
+    age = _number(o.get("age"))
+    who = "Not checked" if o.get("rtdd_known") is False else "Not revised"
+    return {"status": rtdd_status(o), "action": rtdd_action(o), "due": due_week(o),
+            "late": _band(max(-late, 0), LATE_BANDS) if is_overdue(o) and late is not None else "",
+            "reason": (rtdd_reason(o)[0] or "Other") if o.get("rtdd") else who,
+            "age": "" if age is None else _band(age, AGE_BANDS), "stage": o.get("status") or "",
+            "type": (o.get("type") or "").title(), "service": o.get("service") or "",
+            "country": (o.get("country") or o.get("sales_country") or "").title(),
+            "customer": o.get("customer") or "", "manager": o.get("manager") or "", "dpm": o.get("dpm") or "",
+            "team": o.get("team") or "", "cluster": o.get("cluster") or ""}
+
+
+def average_slip(orders):
+    """How many days the revised orders moved, on average: RTDD minus initial date. None without any."""
+    slips = [(o["rtdd"] - o["ittd"]).days for o in orders
+             if isinstance(o.get("rtdd"), date) and isinstance(o.get("ittd"), date)]
+    return round(sum(slips) / len(slips)) if slips else None
 
 
 def money(v):

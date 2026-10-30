@@ -1,5 +1,23 @@
 # GOLD Express - what's new
 
+## 2.20.0
+- **DPM dashboard: click anything and the whole dashboard follows.** Click a slice of the RTDD status
+  ring, a bar, a card or a row in a table: the cards, the other charts, the Scorecard and Orders due
+  all update. The clicked slice stays highlighted so you can pick another one, clicks in different
+  charts add up, and clicking it again (or the red chip) clears it. The Excel export follows too.
+- **More analytics in the dashboard**: how late the overdue orders are, order stage, order type, top
+  products, top countries, most overdue DPMs, and how many days revised orders moved on average.
+- **My Orders has its own Dashboard, for every DPM.** It needs no access to the APM sheet: RTDD status,
+  when orders fall due, how late they are, order stage, customers, why RTDDs moved, type, products and
+  countries, all clickable. A click also filters the Orders list.
+- **Send overdue to RTDD (My Orders)**: one click puts your overdue orders in Revised Target Date, ready
+  for their new dates, with no copying and pasting. **Send to RTDD** in the DPM dashboard does the same
+  for the selected orders, or all those shown.
+- **My Orders now knows the RTDD.** GOLD's list has only the initial date, so an order with a later
+  RTDD used to show as past its target date. The app now takes the RTDD from the APM sheet if you have
+  it, or reads it from the order in GOLD (**Check RTDDs**, read-only, and remembered). Overdue, due in
+  30 days and the order list use the real target date, and there is a new RTDD column.
+
 ## 2.19.0
 - **DPM dashboard: now a full RTDD dashboard for DPMs and managers** - built like the Performance
   Management page of the DPM KPIs report, from the daily APM Open Orders sheet. Six cards: open orders,

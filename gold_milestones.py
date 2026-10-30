@@ -286,6 +286,18 @@ def compare_date(driver, wait, rows):
     return max(found, key=lambda f: f[0]) if found else (None, "")
 
 
+def read_rtdd(driver, wait, order):
+    """The order's current RTDD, read from its Milestones tab (changes nothing):
+    {"rtdd": date or None, "reason": the milestone's title}."""
+    oo.open_orders_tab(driver, wait, discard_changes=True)
+    oo.untick_my_orders(driver)
+    row = oo.search_order(driver, wait, order)
+    oo.open_result(driver, wait, row, order)
+    cur = current_rtdd(milestone_rows(driver, wait))
+    oo.open_orders_tab(driver, wait, discard_changes=True)
+    return {"rtdd": _date(cur.get("Target Date")) if cur else None, "reason": cur["Title"] if cur else ""}
+
+
 def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=print, confirm=None):
     """Open the order and add the RTDD milestone. Returns a short result message.
     dry_run: fill the form, then Cancel instead of Save.
