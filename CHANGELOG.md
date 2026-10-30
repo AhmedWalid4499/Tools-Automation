@@ -1,5 +1,20 @@
 # GOLD Express - what's new
 
+## 2.21.0
+- **Detailed orders due** (the DPM dashboard's Orders due view, renamed): Order number, Order status,
+  Customer site reference, DPM, ITDD, RTDD, Days, RTDD status, Reason, € and Age. Find also searches the
+  customer site reference, and the Excel export has it.
+- **The Scorecard breaks down**: rows open to the next level, such as Manager > DPM > Customer, DPM team,
+  Region, Sales cluster or Customer, with a Total row. Three sets of columns: **RTDD status**, **To do**
+  (No RTDD, RTDD passed, No date, due in 7, 14 and 30 days, RTDD set, average slip) and **Workload**
+  (orders per DPM, customers, order stages, age, orders over a year old).
+- **Region narrows the lists**: pick APM Europe and Manager, DPM and Cluster offer only what is in APM
+  Europe, and a manager or DPM from another region is cleared.
+- **An order is overdue from its target date itself.** An order due today now shows red in My Orders,
+  counts as Overdue instead of Due in 30 days, and goes with **Send overdue to RTDD**. The dashboards and
+  Order Assignment use the same rule.
+- **My Orders shows only the Target date**: the RTDD column is gone from the list and the Excel export.
+
 ## 2.20.0
 - **DPM dashboard: click anything and the whole dashboard follows.** Click a slice of the RTDD status
   ring, a bar, a card or a row in a table: the cards, the other charts, the Scorecard and Orders due

@@ -218,13 +218,17 @@ def days_left(o):
 
 
 def rtdd_status(o):
-    """OVERDUE, DUE_14, NOT_OVERDUE or NO_DATE: the sheet's Backlog column, else from the days to the target date."""
+    """OVERDUE, DUE_14, NOT_OVERDUE or NO_DATE. An order is overdue from its target date itself: on that day the
+    sheet's Backlog column says either Overdue RTDD or Overdue in 14 days. Otherwise the Backlog column decides,
+    else the days to the target date."""
+    d = days_left(o)
+    if d is not None and d <= 0:
+        return OVERDUE
     backlog = str(o.get("backlog") or "").strip().lower()
     for status in (OVERDUE, DUE_14, NOT_OVERDUE):
         if backlog == status.lower():
             return status
-    d = days_left(o)
-    return NO_DATE if d is None else OVERDUE if d < 0 else DUE_14 if d <= 14 else NOT_OVERDUE
+    return NO_DATE if d is None else DUE_14 if d <= 14 else NOT_OVERDUE
 
 
 def is_overdue(o):
@@ -274,15 +278,19 @@ def per_person(orders):
 def _blank_kpi(name=""):
     return {"name": name, "manager": "", "region": "", "dpms": 0, "open": 0, "revenue": 0.0, "overdue": 0,
             "overdue_rev": 0.0, "due14": 0, "due14_rev": 0.0, "ok": 0, "ok_rev": 0.0, "no_date": 0, "no_rtdd": 0,
-            "passed": 0, "due_soon": 0, "revised": 0, "overdue_pct": 0, "avg_age": None, "oldest": None}
+            "passed": 0, "due_soon": 0, "due7": 0, "revised": 0, "overdue_pct": 0, "avg_age": None, "oldest": None,
+            "manage": 0, "release": 0, "on_hold": 0, "billing": 0, "over_year": 0, "customers": 0, "per_dpm": 0,
+            "revised_pct": 0, "slip": None}
 
 
 def dpm_kpis(orders, by="dpm", soon=30):
     """The DPM dashboard's numbers for the assigned orders, one row per DPM (or per manager, team, cluster,
     customer: by is the order's field, None for one Total row), most overdue first. Each row: name, manager,
     region, dpms, open, revenue; overdue, due14, ok and no_date (the RTDD status, with _rev: their revenue);
-    no_rtdd, passed (what the overdue orders need), due_soon (due in 0..soon days), revised (has an RTDD),
-    overdue_pct, avg_age and oldest (order age in days, None when unknown)."""
+    no_rtdd, passed (what the overdue orders need), due7 and due_soon (due in the next 7 / soon days), revised
+    (has an RTDD), revised_pct, slip (average days the RTDD moved the date), overdue_pct, avg_age and oldest
+    (order age in days, None when unknown), over_year, manage, release, on_hold and billing (order stages),
+    customers and per_dpm."""
     rows = {}
     key = {OVERDUE: "overdue", DUE_14: "due14", NOT_OVERDUE: "ok", NO_DATE: "no_date"}
     for o in orders:
@@ -292,7 +300,8 @@ def dpm_kpis(orders, by="dpm", soon=30):
         r = rows.get(name)
         if r is None:
             r = rows[name] = dict(_blank_kpi(name), manager=(o.get("manager") or "") if by == "dpm" else "",
-                                  region=o["region"] if by == "dpm" else "", _ages=[], _dpms=set())
+                                  region=o["region"] if by == "dpm" else "", _ages=[], _dpms=set(),
+                                  _customers=set(), _slips=[])
         status = rtdd_status(o)
         revenue = _number(o.get("revenue")) or 0
         d = days_left(o)
@@ -304,15 +313,28 @@ def dpm_kpis(orders, by="dpm", soon=30):
         r["no_rtdd"] += rtdd_action(o) == NO_RTDD
         r["passed"] += rtdd_action(o) == RTDD_PASSED
         r["due_soon"] += status != OVERDUE and d is not None and 0 <= d <= soon
+        r["due7"] += status != OVERDUE and d is not None and 0 <= d <= 7
+        stage = {"Manage": "manage", "Release": "release", "On-Hold": "on_hold", "Billing": "billing"}.get(o.get("status"))
+        if stage:
+            r[stage] += 1
+        r["_customers"].add(o.get("customer"))
+        if isinstance(o.get("rtdd"), date) and isinstance(o.get("ittd"), date):
+            r["_slips"].append((o["rtdd"] - o["ittd"]).days)
         r["revised"] += bool(o.get("rtdd"))
         r["_dpms"].add(o["dpm"])
         age = _number(o.get("age"))
         if age is not None:
             r["_ages"].append(age)
+            r["over_year"] += age >= 366
     out = []
     for r in rows.values():
         ages = r.pop("_ages")
+        slips = r.pop("_slips")
         r["dpms"] = len(r.pop("_dpms"))
+        r["customers"] = len(r.pop("_customers"))
+        r["per_dpm"] = round(r["open"] / max(r["dpms"], 1), 1)
+        r["revised_pct"] = round(100 * r["revised"] / r["open"]) if r["open"] else 0
+        r["slip"] = round(sum(slips) / len(slips)) if slips else None
         r["overdue_pct"] = round(100 * r["overdue"] / r["open"]) if r["open"] else 0
         r["avg_age"] = round(sum(ages) / len(ages)) if ages else None
         r["oldest"] = round(max(ages)) if ages else None
@@ -358,7 +380,7 @@ def order_dims(o):
             "type": (o.get("type") or "").title(), "service": o.get("service") or "",
             "country": (o.get("country") or o.get("sales_country") or "").title(),
             "customer": o.get("customer") or "", "manager": o.get("manager") or "", "dpm": o.get("dpm") or "",
-            "team": o.get("team") or "", "cluster": o.get("cluster") or ""}
+            "team": o.get("team") or "", "region": o.get("region") or "", "cluster": o.get("cluster") or ""}
 
 
 def average_slip(orders):

@@ -379,26 +379,26 @@ def export_kpis(path, dpm_rows, manager_rows, orders, source_line="", filter_lin
     od["A1"].font = Font(name=FONT, size=14, bold=True, color=INK)
     due = sorted((o for o in orders if gas.rtdd_status(o) != gas.NOT_OVERDUE),
                  key=lambda o: 10 ** 9 if gas.days_left(o) is None else gas.days_left(o))
-    heads = ["Order", "Status", "Type", "Customer", "End customer", "DPM", "Manager", "Region", "Sales cluster",
+    heads = ["Order", "Cust. site ref", "Status", "Type", "Customer", "End customer", "DPM", "Manager", "Region", "Sales cluster",
              "Initial target date", "RTDD", "Days to due", "RTDD status", "Needs", "RTDD reason", "Reason date",
              "Revenue €", "Order age (days)", "Service", "Project", "Country"]
     rows = []
     for o in due:
         who, when = gas.rtdd_reason(o)
-        rows.append([o["order"], o.get("status"), o.get("type"), o.get("customer"), o.get("end_customer"), o["dpm"],
+        rows.append([o["order"], o.get("site_ref"), o.get("status"), o.get("type"), o.get("customer"), o.get("end_customer"), o["dpm"],
                      o.get("manager"), o["region"], o.get("cluster"), _value(o.get("ittd")), _value(o.get("rtdd")),
                      gas.days_left(o), gas.rtdd_status(o), gas.rtdd_action(o), who, _value(when),
                      round(gas._number(o.get("revenue")) or 0), o.get("age"), o.get("service"), o.get("project"),
                      (o.get("country") or "").title()])
     first, last = _table(od, 3, 1, f"{len(rows)} orders, most overdue first", heads, rows)
     for r in range(first, last + 1):
-        od.cell(r, 17).number_format = "#,##0"
-        status = od.cell(r, 13).value
+        od.cell(r, 18).number_format = "#,##0"
+        status = od.cell(r, 14).value
         if status == gas.OVERDUE:
-            od.cell(r, 13).font = Font(name=FONT, size=9, bold=True, color="C62828")
+            od.cell(r, 14).font = Font(name=FONT, size=9, bold=True, color="C62828")
         elif status == gas.DUE_14:
-            od.cell(r, 13).font = Font(name=FONT, size=9, bold=True, color="A15C00")
-    for i, w in enumerate((15, 10, 10, 30, 30, 24, 24, 13, 15, 13, 12, 8, 17, 16, 10, 12, 10, 9, 28, 28, 14)):
+            od.cell(r, 14).font = Font(name=FONT, size=9, bold=True, color="A15C00")
+    for i, w in enumerate((15, 16, 10, 10, 30, 30, 24, 24, 13, 15, 13, 12, 8, 17, 16, 10, 12, 10, 9, 28, 28, 14)):
         od.column_dimensions[get_column_letter(1 + i)].width = w
     if rows:
         od.auto_filter.ref = f"A4:{get_column_letter(len(heads))}{last}"

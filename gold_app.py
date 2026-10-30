@@ -1305,10 +1305,10 @@ class App(tk.Tk):
                       "Awaiting Close": "#FB923C", "On-Hold": "#EF4444", "Closed": "#94A3B8"}
     CUSTOMER_COLOURS = ("#1F86E0", "#56A72C", "#FF7A00", "#8A3FB8", "#128577", "#DD3F58")
     MY_COLUMNS = (("order", "Order", 95), ("customer", "Customer name", 170), ("cust_site_ref", "Cust. site ref", 120),
-                  ("status", "Order status", 100), ("target", "Target date", 96), ("rtdd", "RTDD", 96),
+                  ("status", "Order status", 100), ("target", "Target date", 96),
                   ("service", "Service", 200),
                   ("type", "Type", 90), ("orange_site_ref", "Orange site ref", 240))
-    MY_SHOWN = ("order", "customer", "cust_site_ref", "status", "target", "rtdd")  # the rest is in the Excel export
+    MY_SHOWN = ("order", "customer", "cust_site_ref", "status", "target")  # the rest is in the Excel export
 
     def _build_my_tab(self, f):
         self.my_frame = f
@@ -1419,7 +1419,7 @@ class App(tk.Tk):
         for c, t, w in self.MY_COLUMNS:
             self.my_tree.heading(c, text=t, anchor="w", command=lambda c=c: self._my_sort(c))
             self.my_tree.column(c, width=int(w * scale), minwidth=int(70 * scale), anchor="w",
-                                stretch=c not in ("order", "status", "target", "rtdd"))  # the others share the rest
+                                stretch=c not in ("order", "status", "target"))  # the others share the rest
         self.my_tree.configure(displaycolumns=self.MY_SHOWN)
         self.my_tree.tag_configure("Closed", foreground=MUTED)
         self.my_tree.tag_configure("late", foreground=RED)
@@ -1667,8 +1667,8 @@ class App(tk.Tk):
             self.settings["digest_date"] = str(today)
             save_settings(self.settings)
             live = [o for o in orders if o.get("status") != "Closed" and o.get("target")]
-            late = sum(1 for o in live if o["target"] < today)
-            soon = sum(1 for o in live if 0 <= (o["target"] - today).days <= 7)
+            late = sum(1 for o in live if o["target"] <= today)
+            soon = sum(1 for o in live if 0 < (o["target"] - today).days <= 7)
             if late or soon:
                 self._notify("Your orders today",
                              f"{late} past their target date, {soon} due within 7 days. Open My Orders for "
@@ -1749,15 +1749,15 @@ class App(tk.Tk):
             if picked is not None and o["order"] not in picked:
                 continue
             d = o.get("target")
-            if f["when"] == "late" and not (d and d < today):
+            if f["when"] == "late" and not (d and d <= today):
                 continue
-            if f["when"] == "due30" and not (d and 0 <= (d - today).days <= 30):
+            if f["when"] == "due30" and not (d and 0 < (d - today).days <= 30):
                 continue
             if q and q not in " ".join(str(v) for v in o.values()).lower():
                 continue
             out.append(o)
         key, rev = self.my_sort_key
-        sort_val = (lambda o: o.get(key) or datetime.max.date()) if key in ("target", "rtdd") else \
+        sort_val = (lambda o: o.get("target") or datetime.max.date()) if key == "target" else \
             (lambda o: str(o.get(key, "")).lower())
         return sorted(out, key=sort_val, reverse=rev)
 
@@ -1767,12 +1767,11 @@ class App(tk.Tk):
         self.my_tree.delete(*self.my_tree.get_children())
         for i, o in enumerate(rows):
             d = o.get("target")
-            late = d and d < today and o.get("status") != "Closed"
+            late = d and d <= today and o.get("status") != "Closed"
             tags = [o.get("status", "")] + (["late"] if late else []) + (["odd"] if i % 2 else [])
             self.my_tree.insert("", "end", iid=o["order"], tags=tags, values=(
                 o["order"], o.get("customer", ""), o.get("cust_site_ref", ""), "●  " + o.get("status", ""),
-                f"{d:%d-%b-%Y}" if d else "", "?" if gas.rtdd_action(o) == gas.NOT_CHECKED else gas.fmt_date(o.get("rtdd")),
-                o.get("service", ""), o.get("type", ""), o.get("orange_site_ref", "")))
+                f"{d:%d-%b-%Y}" if d else "", o.get("service", ""), o.get("type", ""), o.get("orange_site_ref", "")))
         f = self.my_filter
         parts = [p for p in (f["status"] and f"Status: {f['status']}", f["customer"] and f"Customer: {f['customer']}",
                              {"late": "Overdue", "due30": "Due in 30 days"}.get(f["when"])) if p]
@@ -1828,13 +1827,13 @@ class App(tk.Tk):
         path = Path(self._ctx()["workbook"]).parent / f"My_orders_{datetime.now():%Y-%m-%d_%H%M}.xlsx"
         cols = [("Order", "order"), ("Customer", "customer"), ("Cust. Site Ref", "cust_site_ref"),
                 ("Order Status", "status"), ("Service", "service"), ("Initial target date (iTTD)", "ittd_date"),
-                ("RTDD", "rtdd"), ("Target date", "target"), ("Needs", "needs"),
+                ("Target date", "target"), ("Needs", "needs"),
                 ("Order Type", "type"), ("Orange Site Ref", "orange_site_ref"), ("Site Id", "site_id"),
                 ("BAN", "ban"), ("Sales Country", "sales_country"), ("Installed Offer Id", "installed_offer")]
         try:
             gx.write_sheet(path, "My orders", [f"Exported {datetime.now():%d-%b-%Y %H:%M}  ·  {len(rows)} orders"],
                            [("My orders", [c for c, _ in cols],
-                             [[gas.fmt_date(o.get(k)) if k in ("ittd_date", "rtdd", "target")
+                             [[gas.fmt_date(o.get(k)) if k in ("ittd_date", "target")
                                else gas.rtdd_action(o) if k == "needs" else o.get(k, "")
                                for _, k in cols] for o in rows])])
         except PermissionError:
@@ -2344,19 +2343,39 @@ class App(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     # ----- DPM dashboard: RTDD, revenue and workload per DPM and per manager, from the Order Assignment orders
-    # (the assigned ones). Overview = charts, Scorecard = the RTDD table, Orders due = the orders to act on.
-    KPI_VIEWS = (("overview", "Overview"), ("score", "Scorecard"), ("orders", "Orders due"))
-    KPI_GROUPS = (("DPM", "dpm"), ("Manager", "manager"), ("DPM team", "team"), ("Sales cluster", "cluster"),
-                  ("Customer", "customer"))
-    KPI_SCORE_COLUMNS = (("name", "DPM", 105, "w"), ("second", "Manager", 92, "w"), ("ok", "Not overdue", 90, "e"),
-                         ("ok_rev", "€", 62, "e"), ("due14", "In 14 days", 74, "e"), ("due14_rev", "€", 56, "e"),
-                         ("overdue", "Overdue", 64, "e"), ("overdue_rev", "€", 56, "e"), ("open", "Total", 48, "e"),
-                         ("revenue", "€", 66, "e"), ("overdue_pct", "% overdue", 76, "e"),
-                         ("no_rtdd", "No RTDD", 68, "e"), ("avg_age", "Avg age", 62, "e"))
-    KPI_ORDER_COLUMNS = (("order", "Order", 84, "w"), ("customer", "Customer", 145, "w"), ("dpm", "DPM", 115, "w"),
-                         ("status", "Status", 72, "w"), ("ittd", "ITTD", 88, "w"), ("rtdd", "RTDD", 88, "w"),
-                         ("days", "Days", 44, "e"), ("state", "RTDD status", 106, "w"), ("reason", "Reason", 60, "w"),
-                         ("revenue", "€", 56, "e"), ("age", "Age", 42, "e"))
+    # (the assigned ones). Overview = charts, Scorecard = the RTDD table with rows that open, Detailed orders due =
+    # the orders to act on.
+    KPI_VIEWS = (("overview", "Overview"), ("score", "Scorecard"), ("orders", "Detailed orders due"))
+    KPI_GROUPS = (("Manager › DPM › Customer", ("manager", "dpm", "customer")),  # each row opens on the next level
+                  ("DPM › Customer", ("dpm", "customer")),
+                  ("DPM team › Manager › DPM", ("team", "manager", "dpm")),
+                  ("Region › Manager › DPM", ("region", "manager", "dpm")),
+                  ("Sales cluster › Customer › DPM", ("cluster", "customer", "dpm")),
+                  ("Customer › DPM", ("customer", "dpm")))
+    KPI_SCORE_COLUMNS = (("name", "Breakdown", 165, "w"), ("second", "Manager", 92, "w"),
+                         ("ok", "Not overdue", 90, "e"), ("ok_rev", "€", 62, "e"), ("due14", "In 14 days", 74, "e"),
+                         ("due14_rev", "€", 56, "e"), ("overdue", "Overdue", 64, "e"), ("overdue_rev", "€", 56, "e"),
+                         ("open", "Total", 48, "e"), ("revenue", "€", 66, "e"), ("overdue_pct", "% overdue", 76, "e"),
+                         ("no_rtdd", "No RTDD", 68, "e"), ("avg_age", "Avg age", 62, "e"),
+                         ("passed", "RTDD passed", 96, "e"), ("no_date", "No date", 60, "e"),
+                         ("due7", "In 7 days", 66, "e"), ("due_soon", "In 30 days", 72, "e"),
+                         ("revised", "RTDD set", 68, "e"), ("revised_pct", "% set", 52, "e"),
+                         ("slip", "Avg slip (d)", 78, "e"), ("per_dpm", "Per DPM", 62, "e"),
+                         ("customers", "Customers", 74, "e"), ("manage", "Manage", 58, "e"),
+                         ("release", "Release", 58, "e"), ("on_hold", "On-Hold", 60, "e"),
+                         ("billing", "Billing", 54, "e"), ("oldest", "Oldest", 56, "e"),
+                         ("over_year", "Over 1 yr", 68, "e"))
+    KPI_SCORE_SETS = (("RTDD status", ("ok", "ok_rev", "due14", "due14_rev", "overdue", "overdue_rev", "open", "revenue",
+                                       "overdue_pct", "no_rtdd")),
+                      ("To do", ("overdue", "no_rtdd", "passed", "no_date", "due7", "due14", "due_soon", "revised",
+                                 "revised_pct", "slip")),
+                      ("Workload", ("open", "revenue", "per_dpm", "customers", "manage", "release", "on_hold",
+                                    "billing", "avg_age", "oldest", "over_year")))
+    KPI_ORDER_COLUMNS = (("order", "Order number", 104, "w"), ("status", "Order status", 88, "w"),
+                         ("site_ref", "Customer site reference", 165, "w"), ("dpm", "DPM", 108, "w"),
+                         ("ittd", "ITDD", 84, "w"), ("rtdd", "RTDD", 84, "w"),
+                         ("days", "Days", 42, "e"), ("state", "RTDD status", 100, "w"), ("reason", "Reason", 56, "w"),
+                         ("revenue", "€", 50, "e"), ("age", "Age", 38, "e"))
     BOARD_STATUS = {gas.OVERDUE: RED, gas.DUE_14: gui.AMBER_FG, gas.NOT_OVERDUE: GREEN, gas.NO_DATE: gui.GREY_FG}
     BOARD_REASONS = {"Customer": "#1F86E0", "Orange": "#FF7900", "MHS": "#8A3FB8", "Other": gui.GREY_FG,
                      "Not revised": gui.GREY_FG, "Not checked": gui.GREY_FG}
@@ -2397,7 +2416,7 @@ class App(tk.Tk):
         ent = ttk.Entry(bar, textvariable=self.kpi_q, width=13)
         ent.pack(side="left")
         ent.bind("<KeyRelease>", lambda e: self._kpi_render())
-        gui.Tooltip(ent, "Customer, product, project or order number")
+        gui.Tooltip(ent, "Customer, customer site reference, product, project or order number")
         ttk.Button(bar, text="⤓  Excel", style="Small.TButton", command=self._kpi_export).pack(side="right")
         self._btn(bar, "↻  Refresh", lambda: self._oa_load(force=True), "Small.TButton").pack(side="right", padx=6)
 
@@ -2507,27 +2526,34 @@ class App(tk.Tk):
             tree.bind("<ButtonRelease-1>", lambda e, t=tree, d=dim: self._kpi_table_click(e, t, d))
 
     def _build_kpi_score(self, f):
+        self.kpi_opened = set()  # the rows that are open
         t = self._tile(f, fill="both", expand=True)
-        head = self._tile_head(t.body, "RTDD scorecard", "")
-        ttk.Label(head, text="by", style="Muted.TLabel", background=CARD).pack(side="left", padx=(12, 5))
-        self.kpi_group = tk.StringVar(value="DPM")
-        cb = ttk.Combobox(head, textvariable=self.kpi_group, values=[g for g, _ in self.KPI_GROUPS], width=12,
+        head = self._tile_head(t.body, "RTDD scorecard", "\uE9F9")
+        self.kpi_group = tk.StringVar(value=self.KPI_GROUPS[0][0])
+        cb = ttk.Combobox(head, textvariable=self.kpi_group, values=[g for g, _ in self.KPI_GROUPS], width=27,
                           state="readonly")
-        cb.pack(side="left")
-        cb.bind("<<ComboboxSelected>>", lambda e: self._kpi_fill())
-        tk.Label(head, text="click a heading to sort  ·  double-click a row to see its orders", bg=CARD, fg=FAINT,
-                 font=(FONT, 8)).pack(side="right")
-        self.kpi_tree = self._kpi_table(t.body, self.KPI_SCORE_COLUMNS, ("name", "second"), self._kpi_score_by,
+        cb.pack(side="left", padx=(12, 0))
+        cb.bind("<<ComboboxSelected>>", lambda e: (self.kpi_opened.clear(), self._kpi_fill()))
+        self.kpi_set = tk.StringVar(value=self.KPI_SCORE_SETS[0][0])
+        for name, _ in self.KPI_SCORE_SETS:
+            ttk.Radiobutton(head, text=name, value=name, variable=self.kpi_set, style="SegSm.TRadiobutton",
+                            command=self._kpi_fill).pack(side="left", padx=(8 if name == self.KPI_SCORE_SETS[0][0] else 4, 0))
+        self._btn(head, "Open / close all", self._kpi_score_all, "Small.TButton").pack(side="right")
+        self.kpi_tree = self._kpi_table(t.body, self.KPI_SCORE_COLUMNS, ("name",), self._kpi_score_by,
                                         "extended")
         self.kpi_tree_copy = gui.TableCopy(self.kpi_tree, self.log)
-        self.kpi_tree.bind("<Double-1>", lambda e: self._kpi_score_open())
-        tk.Label(t.body, text=f"Red: {self.KPI_LATE_RED}% or more of the orders are overdue, amber: "
-                              f"{self.KPI_LATE_AMBER}% or more.  € = the sheet's Total Revenue.  Manager: from the "
-                              "Org Chart.", bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w").pack(fill="x", pady=(6, 0))
+        self.kpi_tree.tag_configure("total", font=(FONT, 9, "bold"))
+        self.kpi_tree.tag_configure("top", font=(FONT, 9, "bold"))
+        self.kpi_tree.bind("<ButtonRelease-1>", self._kpi_score_click, add="+")
+        self.kpi_tree.bind("<Double-1>", self._kpi_score_open)
+        tk.Label(t.body, text=f"Click ▸ to open a row  ·  double-click a row to see its orders  ·  click a heading to "
+                              f"sort.  Red: {self.KPI_LATE_RED}% or more overdue, amber: {self.KPI_LATE_AMBER}% or "
+                              "more.  € = the sheet's Total Revenue.", bg=CARD, fg=MUTED, font=(FONT, 8),
+                 anchor="w").pack(fill="x", pady=(6, 0))
 
     def _build_kpi_due(self, f):
         t = self._tile(f, fill="both", expand=True)
-        head = self._tile_head(t.body, "Orders due", "")
+        head = self._tile_head(t.body, "Detailed orders due", "")
         self.kpi_show = tk.StringVar(value=self.KPI_DUE_SOON)
         cb = ttk.Combobox(head, textvariable=self.kpi_show, values=self.KPI_SHOWS, width=22, state="readonly")
         cb.pack(side="left", padx=(12, 0))
@@ -2537,7 +2563,7 @@ class App(tk.Tk):
         self._btn(head, "Send to RTDD", self._kpi_to_rtdd, "Small.TButton").pack(side="right")
         tk.Label(head, text="the selected orders, or all of them", bg=CARD, fg=FAINT, font=(FONT, 8)).pack(side="right",
                                                                                                          padx=6)
-        self.kpi_due = self._kpi_table(t.body, self.KPI_ORDER_COLUMNS, ("customer", "dpm"), self._kpi_order_sort_by,
+        self.kpi_due = self._kpi_table(t.body, self.KPI_ORDER_COLUMNS, ("site_ref",), self._kpi_order_sort_by,
                                        "extended")
         self.kpi_due_copy = gui.TableCopy(self.kpi_due, self.log)
         self.kpi_due.bind("<Double-1>", lambda e: self._kpi_due_open())
@@ -2558,14 +2584,18 @@ class App(tk.Tk):
                     or (dpm and o["dpm"] != dpm and not gn.matches(o["dpm"], dpm)):
                 continue
             if q and q not in " ".join(str(o.get(k) or "") for k in (
-                    "order", "customer", "end_customer", "service", "project")).lower():
+                    "order", "site_ref", "customer", "end_customer", "service", "project")).lower():
                 continue
             out.append(o)
         return out
 
     def _kpi_changed(self):
-        self._kpi_remember()
         self._kpi_render()
+        dpm = self.kpi_dpm.get().strip()
+        if self.oa_orders and dpm and not any(gn.matches(n, dpm) for n in self.kpi_people):
+            self.kpi_dpm.set("")  # not in the region or manager just picked
+            self._kpi_render()
+        self._kpi_remember()
 
     def _kpi_remember(self):
         """Keep the Region / Manager / DPM filters, so DPMs and managers come back to their own numbers."""
@@ -2588,22 +2618,25 @@ class App(tk.Tk):
             self.kpi_empty.place(relx=0.5, rely=0.3, anchor="center")
         assigned = [o for o in self.oa_orders if o["category"] == gas.ASSIGNED]
         self.kpi_region_cb.configure(values=self._oa_regions())
-        managers = self._oa_managers()
-        clusters = ["All clusters"] + sorted({o["cluster"] for o in assigned if o.get("cluster")}, key=str.lower)
+        if self.oa_orders and self.kpi_region.get() not in self._oa_regions():  # a saved filter that no longer exists
+            self.kpi_region.set("All regions")
+        # Each list has only what fits the filters before it: Region > Manager > DPM and Cluster
+        region = self.kpi_region.get()
+        scope = [o for o in assigned if region == "All regions" or o["region"] == region]
+        managers = [self.ALL_MANAGERS] + sorted({o["manager"] for o in scope if o.get("manager")}, key=str.lower)
         self.kpi_manager_cb.configure(values=managers)
+        if self.oa_orders and self.kpi_manager.get() not in managers:
+            self.kpi_manager.set(self.ALL_MANAGERS)
+        if self.kpi_manager.get() != self.ALL_MANAGERS:
+            scope = [o for o in scope if o.get("manager") == self.kpi_manager.get()]
+        clusters = ["All clusters"] + sorted({o["cluster"] for o in scope if o.get("cluster")}, key=str.lower)
         self.kpi_cluster_cb.configure(values=clusters)
-        if self.oa_orders:  # a saved filter that no longer exists
-            if self.kpi_manager.get() not in managers:
-                self.kpi_manager.set(self.ALL_MANAGERS)
-            if self.kpi_region.get() not in self._oa_regions():
-                self.kpi_region.set("All regions")
-            if self.kpi_cluster.get() not in clusters:
-                self.kpi_cluster.set("All clusters")
+        if self.oa_orders and self.kpi_cluster.get() not in clusters:
+            self.kpi_cluster.set("All clusters")
         typed = self.kpi_dpm.get().strip()
-        people = sorted({o["dpm"] for o in assigned
-                         if self.kpi_manager.get() == self.ALL_MANAGERS or o.get("manager") == self.kpi_manager.get()},
-                        key=str.lower)
+        people = sorted({o["dpm"] for o in scope}, key=str.lower)
         self.kpi_dpm_cb.configure(values=[n for n in people if not typed or gn.matches(n, typed)])
+        self.kpi_people = people
 
         self.kpi_board.set_orders(self._kpi_orders())
         self._kpi_sliced()
@@ -2697,39 +2730,100 @@ class App(tk.Tk):
         else:
             board.toggle("status", what)
 
-    def _kpi_group_key(self):
+    def _kpi_path(self):
         return dict(self.KPI_GROUPS)[self.kpi_group.get()]
 
-    def _kpi_fill_score(self):
-        by = self._kpi_group_key()
-        rows = gas.dpm_kpis(self.kpi_shown, by=by)
+    def _kpi_score_cell(self, r, col):
+        """What a Scorecard column shows for a row."""
+        v = r[col]
+        if col.endswith("_rev") or col == "revenue":
+            count = r["open" if col == "revenue" else col[:-4]]
+            return gas.money(v) if count else ""
+        if col in ("overdue_pct", "revised_pct"):
+            return f"{v}%"
+        return "" if v is None or v == 0 else v
+
+    def _kpi_score_sorted(self, rows):
         key, rev = self.kpi_sort
         rows.sort(key=lambda r: r["name"].lower())  # ties: by name
         if key == "name":
             rows.sort(key=lambda r: (r["name"] == "", r["name"].lower()), reverse=rev)
         elif key == "second":
-            second = (lambda r: (r["manager"] == "", r["manager"].lower())) if by == "dpm" else (lambda r: r["dpms"])
-            rows.sort(key=second, reverse=rev)
+            rows.sort(key=lambda r: (r["manager"].lower(), r["dpms"]), reverse=rev)
         else:
             rows.sort(key=lambda r: -1 if r[key] is None else r[key], reverse=rev)
+        return rows
+
+    def _kpi_fill_score(self):
+        path = self._kpi_path()
         t = self.kpi_tree
-        titles = {"name": self.kpi_group.get(), "second": "Manager" if by == "dpm" else "DPMs"}
+        key, rev = self.kpi_sort
+        shown = dict(self.KPI_SCORE_SETS)[self.kpi_set.get()]
+        t.configure(displaycolumns=("name", "second") + shown)
+        # the first column takes what the numbers leave, for long names on the deeper levels
+        scale = self.winfo_fpixels("1i") / 96
+        widths = {c: w for c, _, w, _ in self.KPI_SCORE_COLUMNS}
+        second = int((110 if path[0] == "dpm" else 54) * scale)
+        t.column("second", width=second)
+        t.update_idletasks()
+        used = second + sum(int(widths[c] * scale) for c in shown)
+        t.column("name", width=max(t.winfo_width() - used, int(widths["name"] * scale)))
+        titles = {"name": self.kpi_group.get().split(" › ")[0], "second": "Manager" if path[0] == "dpm" else "DPMs"}
         for c, title, *_ in self.KPI_SCORE_COLUMNS:
             t.heading(c, text=titles.get(c, title) + (" ▼" if rev else " ▲") * (c == key))
         t.delete(*t.get_children())
-        cash = gas.money
-        for i, r in enumerate(rows):
-            tags = [self._kpi_level(r["overdue_pct"], r["overdue"])] + (["odd"] if i % 2 else [])
-            t.insert("", "end", iid=r["name"] or "-", tags=[x for x in tags if x], values=(
-                r["name"] or "(not known)", (r["manager"] or "-") if by == "dpm" else r["dpms"], r["ok"] or "",
-                cash(r["ok_rev"]) if r["ok"] else "", r["due14"] or "", cash(r["due14_rev"]) if r["due14"] else "",
-                r["overdue"] or "", cash(r["overdue_rev"]) if r["overdue"] else "", r["open"], cash(r["revenue"]),
-                f"{r['overdue_pct']}%", r["no_rtdd"] or "", "" if r["avg_age"] is None else r["avg_age"]))
+        columns = [c for c, *_ in self.KPI_SCORE_COLUMNS]
+        count = [0]
+
+        def add(orders, depth, parent):
+            by = path[depth]
+            for r in self._kpi_score_sorted(gas.dpm_kpis(orders, by=by)):
+                iid = f"{parent}\t{r['name']}"
+                more = depth + 1 < len(path)
+                opened = more and iid in self.kpi_opened
+                name = "     " * depth + ("▾ " if opened else "▸ " if more else "   ") + (r["name"] or "(not known)")
+                second = r["manager"] or "-" if by == "dpm" and depth == 0 else r["dpms"] if path[0] != "dpm" else ""
+                cells = {"name": name, "second": second}
+                level = self._kpi_level(r["overdue_pct"], r["overdue"])
+                tags = [x for x in (level, "top" if depth == 0 else "", "odd" if count[0] % 2 else "") if x]
+                t.insert("", "end", iid=iid, tags=tags, values=[
+                    cells[c] if c in cells else self._kpi_score_cell(r, c) for c in columns])
+                count[0] += 1
+                if opened:
+                    add([o for o in orders if (o.get(by) or "") == r["name"]], depth + 1, iid)
+
+        add(self.kpi_shown, 0, "~")
+        if self.kpi_shown:
+            total = gas.kpi_total(self.kpi_shown)
+            t.insert("", "end", iid="total", tags=["total"], values=[
+                {"name": "Total", "second": total["dpms"]}.get(c, None) if c in ("name", "second")
+                else self._kpi_score_cell(total, c) for c in columns])
+
+    def _kpi_score_click(self, e):
+        """A click on a row's name opens or closes it."""
+        iid = self.kpi_tree.identify_row(e.y)
+        if iid and iid != "total" and self.kpi_tree.identify_column(e.x) == "#1":
+            self._kpi_score_toggle(iid)
+
+    def _kpi_score_toggle(self, iid):
+        if iid.count("\t") >= len(self._kpi_path()):  # the last level does not open
+            return
+        self.kpi_opened.symmetric_difference_update({iid})
+        if iid not in self.kpi_opened:  # and what was open under it closes too
+            self.kpi_opened = {i for i in self.kpi_opened if not i.startswith(iid + "\t")}
+        self._kpi_fill_score()
+
+    def _kpi_score_all(self):
+        """Open every top row, or close everything."""
+        if self.kpi_opened:
+            self.kpi_opened = set()
+        else:
+            self.kpi_opened = {i for i in self.kpi_tree.get_children() if i != "total"}
+        self._kpi_fill_score()
 
     def _kpi_score_by(self, col):
         key, rev = self.kpi_sort
-        names = col in ("name", "second") and (col == "name" or self._kpi_group_key() == "dpm")
-        self.kpi_sort = (col, not rev if key == col else not names)  # numbers: biggest first
+        self.kpi_sort = (col, not rev if key == col else col not in ("name", "second"))  # numbers: biggest first
         if self.kpi_view.get() != "score":
             self.kpi_view.set("score")
             self._kpi_view_changed()
@@ -2773,7 +2867,7 @@ class App(tk.Tk):
             days = gas.days_left(o)
             level = "red" if status == gas.OVERDUE else "amber" if status == gas.DUE_14 else ""
             t.insert("", "end", iid=f"{o['order']}#{i}", tags=[x for x in (level, "odd" if i % 2 else "") if x], values=(
-                o["order"], o.get("customer") or "", o["dpm"], o.get("status") or "", gas.fmt_date(o.get("ittd")),
+                o["order"], o.get("status") or "", o.get("site_ref") or "", o["dpm"], gas.fmt_date(o.get("ittd")),
                 gas.fmt_date(o.get("rtdd")), "" if days is None else days, gas.rtdd_action(o) or status,
                 gas.rtdd_reason(o)[0], gas.money(gas._number(o.get("revenue"))), "" if o.get("age") is None
                 else o["age"]))
@@ -2800,17 +2894,18 @@ class App(tk.Tk):
         self.kpi_q.set("")
         self._kpi_changed()
 
-    def _kpi_score_open(self):
-        """Double-click on a row: the orders of that DPM, manager, customer..."""
-        sel = self.kpi_tree.selection()
-        if not sel:
+    def _kpi_score_open(self, e=None):
+        """Double-click on a row: the orders of that manager, DPM, customer..."""
+        iid = self.kpi_tree.identify_row(e.y) if e else (self.kpi_tree.selection() or [""])[0]
+        if not iid or iid == "total":
             return
         self.kpi_show.set("All orders")
         self.kpi_view.set("orders")
         for frame in self.kpi_frames.values():
             frame.pack_forget()
         self.kpi_frames["orders"].pack(fill="both", expand=True)
-        self.kpi_board.choose(self._kpi_group_key(), "" if sel[0] == "-" else sel[0])
+        self.kpi_board.selected.update(zip(self._kpi_path(), iid.split("\t")[1:]))
+        self.kpi_board.on_change()
 
     def _kpi_due_selected(self):
         return list(dict.fromkeys(self.kpi_due.set(i, "order") for i in self.kpi_due.selection()))

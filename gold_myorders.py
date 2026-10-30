@@ -149,9 +149,9 @@ def summary(orders):
             "open": len(live),
             "closed": by_status.get("Closed", 0),
             "on_hold": by_status.get("On-Hold", 0),
-            # target date (the RTDD, else iTTD) passed / within 30 days, for orders not closed
-            "late": sum(1 for o in live if target(o) and target(o) < today),
-            "due_30": sum(1 for o in live if target(o) and 0 <= (target(o) - today).days <= 30),
+            # target date (the RTDD, else iTTD) reached / within 30 days, for orders not closed
+            "late": sum(1 for o in live if target(o) and target(o) <= today),
+            "due_30": sum(1 for o in live if target(o) and 0 < (target(o) - today).days <= 30),
             "upcoming": sorted((o for o in live if target(o)), key=target),
             "customers": len(by_customer),
             "by_status": sorted(by_status.items(), key=lambda kv: order.get(kv[0], 99)),
