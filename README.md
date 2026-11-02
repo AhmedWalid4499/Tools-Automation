@@ -38,6 +38,10 @@ app's top bar turns orange.
 
 ## For developers
 
+**Start with [`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md)**: how the app works, every feature, the business rules,
+build and release, testing, and step-by-step recipes for common changes. [`CLAUDE.md`](CLAUDE.md) is the short
+version for Claude Code.
+
 ```
 pip install selenium openpyxl pillow anthropic pyinstaller
 python gold_app.py                    # run from source
@@ -65,5 +69,5 @@ To release a new version: bump `__version__` in `version.py`, add a section to `
 | `gold_ai.py`, `gold_markdown.py` | Ask GOLD: Claude conversation with read-only GOLD tools, answer rendering |
 | `installer/` | Inno Setup wizard |
 
-The built-in DPM names list (`data/dpm_names_default.json`) is kept out of this repository and packed
-into the app at build time.
+The DPM names list is kept out of this repository and out of the installer (both are public): each user's
+list is built from the Org Chart, and kept in their own data folder.
