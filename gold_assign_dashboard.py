@@ -32,6 +32,7 @@ ORDER_COLUMNS = [("Order", "order"), ("Status", "status"), ("Type", "type"), ("C
                  ("Project", "project")]
 
 
+CATEGORY_COLUMN = 1 + [k for _, k in ORDER_COLUMNS].index("category")  # "Assignment", coloured by category
 _overdue = gas.is_overdue
 F_CELL = Font(name=FONT, size=9, color=INK)
 F_HEAD = Font(name=FONT, size=9, bold=True, color="FFFFFF")
@@ -273,7 +274,7 @@ def export(path, orders, source_line="", filter_line=""):
                 sh.cell(i, j, _value(o.get(k)))
             cat = o["category"]
             if cat != gas.ASSIGNED:
-                sh.cell(i, 7).font = F_CAT[cat]
+                sh.cell(i, CATEGORY_COLUMN).font = F_CAT[cat]
         sh.freeze_panes = "B5"
         if rows:
             sh.auto_filter.ref = f"A4:{get_column_letter(len(ORDER_COLUMNS))}{4 + len(rows)}"
@@ -305,9 +306,11 @@ def export(path, orders, source_line="", filter_line=""):
     return path
 
 
-def export_kpis(path, dpm_rows, manager_rows, orders, source_line="", filter_line=""):
+def export_kpis(path, dpm_rows, manager_rows, orders, source_line="", filter_line="", due=None,
+                due_title="Orders overdue, due in 14 days or without a date"):
     """The DPM dashboard: headline RTDD numbers and the DPM scorecard (gold_assignments.dpm_kpis rows), the same
-    per manager, and the orders that need attention."""
+    per manager, and the orders that need attention: due (the orders the dashboard's Detailed orders due view
+    shows, titled due_title), else every order that is not "Not overdue"."""
     wb = Workbook()
     ws = wb.active
     ws.title = "DPM scorecard"
@@ -375,10 +378,11 @@ def export_kpis(path, dpm_rows, manager_rows, orders, source_line="", filter_lin
 
     od = wb.create_sheet("Orders due")
     od.sheet_view.showGridLines = False
-    od["A1"] = "Orders overdue, due in 14 days or without a date"
+    od["A1"] = due_title
     od["A1"].font = Font(name=FONT, size=14, bold=True, color=INK)
-    due = sorted((o for o in orders if gas.rtdd_status(o) != gas.NOT_OVERDUE),
-                 key=lambda o: 10 ** 9 if gas.days_left(o) is None else gas.days_left(o))
+    if due is None:
+        due = [o for o in orders if gas.rtdd_status(o) != gas.NOT_OVERDUE]
+    due = sorted(due, key=lambda o: 10 ** 9 if gas.days_left(o) is None else gas.days_left(o))
     heads = ["Order", "Cust. site ref", "Status", "Type", "Customer", "End customer", "DPM", "Manager", "Region", "Sales cluster",
              "Initial target date", "RTDD", "Days to due", "RTDD status", "Needs", "RTDD reason", "Reason date",
              "Revenue €", "Order age (days)", "Service", "Project", "Country"]

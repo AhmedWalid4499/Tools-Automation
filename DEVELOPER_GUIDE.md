@@ -705,7 +705,8 @@ Every error path cancels the edit, because Manage Teams locks the order. "Alread
   double-click a row to see its orders. Row ids are the path joined with tabs (`"~\tManager\tDPM"`).
 - **Detailed orders due:** Order number, Order status, Customer site reference, DPM, ITDD, RTDD, Days, RTDD
   status, Reason, €, Age; **Send to RTDD** sends the selected orders (or all shown) to Revised Target Date.
-- **Excel:** DPM scorecard, By manager, Orders due.
+- **Excel:** DPM scorecard, By manager, and Orders due (the same orders as Detailed orders due, with its
+  "Show" choice in the title).
 
 ### 11.8 DPM names and Org Chart
 
@@ -814,7 +815,7 @@ One row per value of `by` (any order field: `dpm`, `manager`, `team`, `region`, 
 | Tracker | `gtr.export` | Tracker sheet (management or customer view) + Per order. |
 | Bulk results | `_bulk_run` | Rows + Result + Details, "TEST ONLY" when a test. |
 | Order Assignment | `gad.export` | Dashboard with native charts, All orders, Unassigned, Not in DPM list, Per STM. |
-| DPM dashboard | `gad.export_kpis` | DPM scorecard (+ chart), By manager, Orders due. Follows the dashboard's filters and clicks. |
+| DPM dashboard | `gad.export_kpis` | DPM scorecard (+ chart), By manager, Orders due (the orders Detailed orders due shows). Follows the dashboard's filters and clicks. |
 | My Orders | `_my_export` | The orders shown, with initial and target dates. |
 
 Exports are written next to the order workbook folder (`_ctx()["workbook"]`) and offered to open. If a file
@@ -1056,11 +1057,6 @@ the CHANGELOG, and any test that checks them. Both the DPM dashboard and My Orde
 
 Found while writing this guide; none is urgent.
 
-- **Order Assignment Excel:** the category colour is applied to column 7 (Manager) instead of column 8
-  (Assignment) in `gad.export`.
-- **Order Assignment Excel:** the filter line does not mention the Manager filter, though the rows follow it.
-- **DPM dashboard Excel:** the "Orders due" sheet always lists every order that is not "Not overdue" (including
-  No date), whatever the Detailed view shows.
 - **Comments out of date:** `gold_assignments.py` says the sheet data "is never kept in the app", but the latest
   copy is kept as `apm_open_orders.xlsx`; the README and `.gitignore` say the DPM list is packed into the app at
   build time, but it no longer is (the installer is public).

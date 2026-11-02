@@ -1,5 +1,11 @@
 # GOLD Express - what's new
 
+## 2.21.2
+- **DPM dashboard Excel: the Orders due sheet has the orders you see** in Detailed orders due (its Show
+  choice, such as Overdue + next 14 days or No RTDD set, is in the sheet's title).
+- **Order Assignment Excel:** the Assignment column is coloured again (Unassigned in red, Not in DPM list
+  in amber), and the filter line includes the Manager filter.
+
 ## 2.21.1
 - **The GOLD bot moves smoothly**: the bot, its purple glow, the flowing banner and the thinking dots
   now run at a much higher frame rate, follow the clock so a busy moment no longer slows them, and the

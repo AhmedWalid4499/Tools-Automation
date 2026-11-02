@@ -2319,7 +2319,8 @@ class App(tk.Tk):
                   f"{datetime.fromtimestamp(self.oa_time):%d-%b-%Y %H:%M}")
         parts = [p for p in (dict(self.OA_SHOWS).get(self.oa_show.get()) if self.oa_show.get() != "all" else "",
                              self.oa_region.get() if self.oa_region.get() != "All regions" else "",
-                             self.oa_dpm.get().strip(),
+                             f"manager {self.oa_manager.get()}" if self.oa_manager.get() != self.ALL_MANAGERS
+                             else "", self.oa_dpm.get().strip(),
                              f"search “{self.oa_search.get().strip()}”" if self.oa_search.get().strip() else "")
                  if p]
         filt = ("Filter: " + ", ".join(parts)) if parts else "All orders"
@@ -2952,9 +2953,12 @@ class App(tk.Tk):
         path = Path(self._ctx()["workbook"]).parent / f"DPM_dashboard_{datetime.now():%Y-%m-%d_%H%M%S}.xlsx"
         source = (f"{gas.file_name(self._oa_link())}, refreshed on SharePoint "
                   f"{datetime.fromtimestamp(self.oa_time):%d-%b-%Y %H:%M}")
+        show = self.kpi_show.get()  # the Orders due sheet has what Detailed orders due shows
+        due = [o for o in orders if self._kpi_fits(o, show)]
         try:
             gad.export_kpis(path, dpm_rows, gas.dpm_kpis(orders, by="manager"), orders, source,
-                            f"Filter: {self.kpi_filter_text}" if self.kpi_filter_text else "All DPMs")
+                            f"Filter: {self.kpi_filter_text}" if self.kpi_filter_text else "All DPMs",
+                            due=due, due_title=f"Detailed orders due: {show}")
         except PermissionError:
             messagebox.showerror(APP_NAME, f"{path.name} is open in Excel. Close it and try again.")
             return
