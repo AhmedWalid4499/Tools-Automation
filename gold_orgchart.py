@@ -41,14 +41,15 @@ const cb = arguments[arguments.length - 1];
 const [last, first, email, cuid] = arguments;
 $.ajax({url: '/ooc_staff/search/', type: 'POST', timeout: 30000,
   data: {csrfmiddlewaretoken: getCSRFToken(), firstName: first, lastName: last, email: email, cuid: cuid},
-  success: j => cb({ok: j.empl || []}), error: x => cb({err: x.status})});
+  success: j => cb(j && typeof j === 'object' ? {ok: j.empl || []} : {err: 0}), error: x => cb({err: x.status})});
 """
+# (an answer that is not JSON is the sign-in page: the tab's sign-in expired, so it counts as a failure)
 # "Search by: Organization": the department list, then everyone in the chosen departments (the page's own requests)
 _DEPTS_JS = r"""
 const cb = arguments[arguments.length - 1];
 $.ajax({url: '/ooc_staff/ajax/deptdesc/', type: 'POST', timeout: 60000,
   data: {csrfmiddlewaretoken: getCSRFToken(), mgtcode: '', dept_id: ''},
-  success: j => cb({ok: j.deptdesc || []}), error: x => cb({err: x.status})});
+  success: j => cb(j && typeof j === 'object' ? {ok: j.deptdesc || []} : {err: 0}), error: x => cb({err: x.status})});
 """
 _DEPT_PEOPLE_JS = r"""
 const cb = arguments[arguments.length - 1];
@@ -56,8 +57,22 @@ $.ajax({url: '/ooc_staff/search/', type: 'POST', timeout: 60000,
   data: {csrfmiddlewaretoken: getCSRFToken(), firstName: '', lastName: '', email: '', cuid: '', 'generic-company': '',
          'headcount-keys': '', p1: '', p2: '', m3: '', 'mgt-code': '', 'department-id': '', department: arguments[0],
          region: '', country: '', location: ''},
-  success: j => cb({ok: j.empl || []}), error: x => cb({err: x.status})});
+  success: j => cb(j && typeof j === 'object' ? {ok: j.empl || []} : {err: 0}), error: x => cb({err: x.status})});
 """
+
+
+class SignInNeeded(RuntimeError):
+    """The Org Chart asks for a sign-in that did not happen by itself: show the browser so the user can do it."""
+
+
+class SearchFailed(RuntimeError):
+    """An Org Chart request failed, often because the page's sign-in expired: reopen the tab and try again."""
+
+    def __init__(self, status):
+        self.status = status
+        why = {0: "no answer - connection lost or the sign-in expired", 403: "access refused",
+               500: "the Org Chart had an error"}.get(status, f"HTTP {status}")
+        super().__init__(f"The Org Chart search failed ({why}).")
 
 
 def firefox(profile_dir=None, headless=False):
@@ -107,7 +122,35 @@ class OrgChart:
                         "return typeof getCSRFToken === 'function' && typeof $ !== 'undefined'"):
                     return self
             time.sleep(1)  # an Orange sign-in page: the user completes it in the window
-        raise RuntimeError("The Org Chart did not open (Orange network / sign-in?).")
+        problem, sign_in = self._diagnose()
+        if sign_in:
+            raise SignInNeeded(f"The Org Chart needs you to sign in ({problem}).")
+        raise RuntimeError(f"The Org Chart did not open: {problem}.")
+
+    def _diagnose(self):
+        """Why the tab is not on the Org Chart yet: (what it shows, whether the user has to sign in)."""
+        d = self.d
+        try:
+            url, title = d.current_url or "", d.title or ""
+            text = d.execute_script("return (document.body && document.body.innerText || '')"
+                                    ".slice(0, 3000).toLowerCase()") or ""
+            password = d.execute_script("return [...document.querySelectorAll('input[type=password]')]"
+                                        ".some(e => e.offsetParent !== null)")
+        except WebDriverException:
+            return "the browser tab stopped responding", False
+        host = urlparse(url).hostname or url
+        # Firefox's error pages keep the site's address: tell them by their title
+        if url.startswith("about:certerror") or "security risk" in title.lower():
+            return "Firefox does not trust the site's certificate", False
+        if url.startswith("about:neterror") or "problem loading page" in title.lower():
+            return "the site cannot be reached - are you on the Orange network or VPN?", False
+        if re.search(r"access denied|not authori[sz]ed|forbidden|no access", text):
+            return f"your account has no access to it ({host})", False
+        if password or re.search(r"sign.?in|log.?in|password|authenticat", text + " " + title.lower()):
+            return f"Orange sign-in page on {host}", True
+        if host == HOST:
+            return "the page opened but did not finish loading (slow network?)", False
+        return f"it stopped on {host}" + (f" - {title}" if title else ""), True
 
     def __exit__(self, *exc):
         d = self.d
@@ -132,21 +175,15 @@ class OrgChart:
     # ---------------------------------------------------------------- search
     def search(self, last="", first="", email="", cuid=""):
         """Raw Org Chart records matching the fields (partial names work; same as the page's Search button)."""
-        d = self.d
-        d.switch_to.window(self.handle)
-        d.set_script_timeout(40)
-        r = d.execute_async_script(_SEARCH_JS, last, first, email, cuid) or {}
-        if "err" in r:
-            raise RuntimeError(f"The Org Chart search failed (HTTP {r['err']}).")
-        return r.get("ok", [])
+        return self._run(_SEARCH_JS, last, first, email, cuid, timeout=40)
 
-    def _run(self, js, *args):
+    def _run(self, js, *args, timeout=90):
         d = self.d
         d.switch_to.window(self.handle)
-        d.set_script_timeout(90)
+        d.set_script_timeout(timeout)
         r = d.execute_async_script(js, *args) or {}
         if "err" in r:
-            raise RuntimeError(f"The Org Chart search failed (HTTP {r['err']}).")
+            raise SearchFailed(r["err"])
         return r.get("ok", [])
 
     def departments(self, text=""):

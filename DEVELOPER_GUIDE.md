@@ -594,6 +594,10 @@ it may already have a later Revised Target Date, so the app finds each order's R
 `gmo.apply_rtdd(orders, known)` then sets on every order: `rtdd`, `rtdd_known`, `target` (the **later** of
 RTDD and iTTD, as GOLD's reports count it) and `due_days`. Overdue means **target on or before today**.
 
+The list shows **ITDD and RTDD side by side** (`MY_SHOWN`), so the DPM can decide whether the RTDD needs
+moving. The RTDD column says "No RTDD" (read, none set) or "Not checked" (not read yet). A row is red when the
+target (the later date) is reached. Clicking a date heading sorts by it (`MY_DATES`).
+
 - **Check RTDDs** (`_my_check_rtdds`) reads the RTDD of orders past their initial date whose RTDD is not known
   (about 8 s per order; asks first above 20; stops after 3 failures in a row).
 - **Send overdue to RTDD** (`_my_send_overdue`) checks first, then puts the really overdue orders in the
@@ -723,6 +727,14 @@ Every error path cancels the edit, because Manage Teams locks the order. "Alread
 - **Org Chart client** (`goc`): opens the Org Chart in a tab of the app's Firefox and calls its own endpoints
   from inside the signed-in page (with the page's CSRF token). `query()` accepts a name, email or CUID;
   `lookup()` caches results 7 days. `App._org(fn)` keeps one Org Chart tab and switches back to GOLD.
+- **When the Org Chart does not open** (`OrgChart._diagnose`):
+  - `goc.SignInNeeded`: Windows did not sign the user in. `_org` then restarts Firefox with its window
+    shown (`Worker.show_browser`) and waits 5 minutes for the user to sign in. With `sign_in=False` (the
+    automatic weekly sync) it raises instead of showing a window.
+  - Any other failure (certificate, network, no access, slow page) raises a `RuntimeError` that names it.
+- **When the tab's sign-in expires** (the tab stays open for hours), searches answer 403, or the sign-in
+  page in place of JSON. That raises `goc.SearchFailed`; `_org` closes the tab, opens a new one and runs
+  `fn` once more.
 
 ### 11.9 GOLD bot (Ask GOLD)
 
@@ -816,7 +828,7 @@ One row per value of `by` (any order field: `dpm`, `manager`, `team`, `region`, 
 | Bulk results | `_bulk_run` | Rows + Result + Details, "TEST ONLY" when a test. |
 | Order Assignment | `gad.export` | Dashboard with native charts, All orders, Unassigned, Not in DPM list, Per STM. |
 | DPM dashboard | `gad.export_kpis` | DPM scorecard (+ chart), By manager, Orders due (the orders Detailed orders due shows). Follows the dashboard's filters and clicks. |
-| My Orders | `_my_export` | The orders shown, with initial and target dates. |
+| My Orders | `_my_export` | The orders shown, with ITDD, RTDD and target date. |
 
 Exports are written next to the order workbook folder (`_ctx()["workbook"]`) and offered to open. If a file
 is open in Excel, the app says so instead of failing.

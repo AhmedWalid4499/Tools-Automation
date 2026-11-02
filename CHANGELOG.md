@@ -1,5 +1,16 @@
 # GOLD Express - what's new
 
+## 2.21.3
+- **My Orders shows the ITDD and the RTDD side by side** (instead of one Target date), so you can see whether
+  the RTDD needs updating. The RTDD column says "No RTDD" when none is set and "Not checked" when it was not
+  read yet. Rows are still red once the later of the two dates is reached. The Excel export has both too.
+- **Org Chart fixes:**
+  - When Windows does not sign you in to the Org Chart by itself, Firefox now opens so you can sign in (you
+    have 5 minutes). Before, it waited 60 s in the background and failed.
+  - The Org Chart reopens by itself when its sign-in expired after the app was open for a while. Before, every
+    search failed until GOLD Express was restarted.
+  - Clearer messages when it cannot open: no network/VPN, certificate, no access, or slow page.
+
 ## 2.21.2
 - **DPM dashboard Excel: the Orders due sheet has the orders you see** in Detailed orders due (its Show
   choice, such as Overdue + next 14 days or No RTDD set, is in the sheet's title).

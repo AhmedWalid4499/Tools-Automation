@@ -168,6 +168,7 @@ class Worker:
         self.driver = None
         self.wait = None
         self.restart = False  # set when the "show Firefox" setting changes
+        self.visible = False  # is the Firefox window shown (so the user can sign in to a site)?
         self.helpers = []     # extra hidden GOLD sessions for reading many orders side by side
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -260,6 +261,7 @@ class Worker:
         show = bool(self.app.settings.get("show_browser"))
         self.app.log("Signing in to GOLD" + ("..." if show else " in the background..."))
         self.driver = start_firefox(headless=not show)
+        self.visible = show
         self.wait = Wait(self.driver, 60)
         self.driver.get(GOLD_URL)
         if wait_for_gold(self.driver, timeout=300 if show else 90):
@@ -267,13 +269,19 @@ class Worker:
         if not show:
             # Background sign-in didn't finish: GOLD probably wants a manual login. Show it.
             self.app.log("GOLD needs you to sign in - opening the Firefox window...")
-            self._quit_driver()
-            self.driver = start_firefox(headless=False)
-            self.wait = Wait(self.driver, 60)
-            self.driver.get(GOLD_URL)
+            self.show_browser()
             if wait_for_gold(self.driver):
                 return
         raise RuntimeError("GOLD did not load. Sign in in the Firefox window, then try again.")
+
+    def show_browser(self):
+        """Restart Firefox with its window shown, on GOLD, so the user can complete a sign-in (GOLD's, or another
+        Orange site's such as the Org Chart). It stays shown until GOLD Express is closed."""
+        self._quit_driver()
+        self.driver = start_firefox(headless=False)
+        self.visible = True
+        self.wait = Wait(self.driver, 60)
+        self.driver.get(GOLD_URL)
 
     def helper_drivers(self, count):
         """Up to `count` extra hidden GOLD sessions (read-only work), each with its own Firefox
@@ -1305,10 +1313,12 @@ class App(tk.Tk):
                       "Awaiting Close": "#FB923C", "On-Hold": "#EF4444", "Closed": "#94A3B8"}
     CUSTOMER_COLOURS = ("#1F86E0", "#56A72C", "#FF7A00", "#8A3FB8", "#128577", "#DD3F58")
     MY_COLUMNS = (("order", "Order", 95), ("customer", "Customer name", 170), ("cust_site_ref", "Cust. site ref", 120),
-                  ("status", "Order status", 100), ("target", "Target date", 96),
+                  ("status", "Order status", 100), ("ittd", "ITDD", 96), ("rtdd", "RTDD", 96),
                   ("service", "Service", 200),
                   ("type", "Type", 90), ("orange_site_ref", "Orange site ref", 240))
-    MY_SHOWN = ("order", "customer", "cust_site_ref", "status", "target")  # the rest is in the Excel export
+    # both dates, so the DPM can decide whether the RTDD needs moving (the later one is the target date)
+    MY_SHOWN = ("order", "customer", "cust_site_ref", "status", "ittd", "rtdd")  # the rest is in the Excel export
+    MY_DATES = ("ittd", "rtdd", "target")
 
     def _build_my_tab(self, f):
         self.my_frame = f
@@ -1419,7 +1429,7 @@ class App(tk.Tk):
         for c, t, w in self.MY_COLUMNS:
             self.my_tree.heading(c, text=t, anchor="w", command=lambda c=c: self._my_sort(c))
             self.my_tree.column(c, width=int(w * scale), minwidth=int(70 * scale), anchor="w",
-                                stretch=c not in ("order", "status", "target"))  # the others share the rest
+                                stretch=c not in ("order", "status", "ittd", "rtdd"))  # the others share the rest
         self.my_tree.configure(displaycolumns=self.MY_SHOWN)
         self.my_tree.tag_configure("Closed", foreground=MUTED)
         self.my_tree.tag_configure("late", foreground=RED)
@@ -1757,7 +1767,7 @@ class App(tk.Tk):
                 continue
             out.append(o)
         key, rev = self.my_sort_key
-        sort_val = (lambda o: o.get("target") or datetime.max.date()) if key == "target" else \
+        sort_val = (lambda o: o.get(key) or datetime.max.date()) if key in self.MY_DATES else \
             (lambda o: str(o.get(key, "")).lower())
         return sorted(out, key=sort_val, reverse=rev)
 
@@ -1766,12 +1776,15 @@ class App(tk.Tk):
         today = datetime.now().date()
         self.my_tree.delete(*self.my_tree.get_children())
         for i, o in enumerate(rows):
-            d = o.get("target")
+            d = o.get("target")  # the later of ITDD and RTDD: red once it is reached
             late = d and d <= today and o.get("status") != "Closed"
             tags = [o.get("status", "")] + (["late"] if late else []) + (["odd"] if i % 2 else [])
+            ittd, rtdd = o.get("ittd"), o.get("rtdd")
             self.my_tree.insert("", "end", iid=o["order"], tags=tags, values=(
                 o["order"], o.get("customer", ""), o.get("cust_site_ref", ""), "●  " + o.get("status", ""),
-                f"{d:%d-%b-%Y}" if d else "", o.get("service", ""), o.get("type", ""), o.get("orange_site_ref", "")))
+                f"{ittd:%d-%b-%Y}" if ittd else "",
+                f"{rtdd:%d-%b-%Y}" if rtdd else "No RTDD" if o.get("rtdd_known") else "Not checked",
+                o.get("service", ""), o.get("type", ""), o.get("orange_site_ref", "")))
         f = self.my_filter
         parts = [p for p in (f["status"] and f"Status: {f['status']}", f["customer"] and f"Customer: {f['customer']}",
                              {"late": "Overdue", "due30": "Due in 30 days"}.get(f["when"])) if p]
@@ -1826,14 +1839,14 @@ class App(tk.Tk):
             return
         path = Path(self._ctx()["workbook"]).parent / f"My_orders_{datetime.now():%Y-%m-%d_%H%M}.xlsx"
         cols = [("Order", "order"), ("Customer", "customer"), ("Cust. Site Ref", "cust_site_ref"),
-                ("Order Status", "status"), ("Service", "service"), ("Initial target date (iTTD)", "ittd_date"),
+                ("Order Status", "status"), ("Service", "service"), ("ITDD", "ittd_date"), ("RTDD", "rtdd"),
                 ("Target date", "target"), ("Needs", "needs"),
                 ("Order Type", "type"), ("Orange Site Ref", "orange_site_ref"), ("Site Id", "site_id"),
                 ("BAN", "ban"), ("Sales Country", "sales_country"), ("Installed Offer Id", "installed_offer")]
         try:
             gx.write_sheet(path, "My orders", [f"Exported {datetime.now():%d-%b-%Y %H:%M}  ·  {len(rows)} orders"],
                            [("My orders", [c for c, _ in cols],
-                             [[gas.fmt_date(o.get(k)) if k in ("ittd_date", "target")
+                             [[gas.fmt_date(o.get(k)) if k in ("ittd_date", "rtdd", "target")
                                else gas.rtdd_action(o) if k == "needs" else o.get(k, "")
                                for _, k in cols] for o in rows])])
         except PermissionError:
@@ -4163,7 +4176,7 @@ class App(tk.Tk):
                     self.log(f"Org Chart: reading {x['name']}...")
                     out += [gn.from_org_chart(r, gn.team_for(x["name"])) for r in oc.department_people([x["id"]])]
                 return out, missing
-            return self._org(read)
+            return self._org(read, sign_in=not quiet)  # the automatic sync never opens a window
 
         def done(res):
             people, missing = res
@@ -4400,27 +4413,51 @@ class App(tk.Tk):
     OC_COLUMNS = (("name", "Name", 190), ("title", "Job title", 220), ("dept", "Department", 200),
                   ("country", "Country", 110), ("team", "GOLD team", 150), ("email", "Email", 230))
 
-    def _org(self, fn):
+    def _org(self, fn, sign_in=True):
         """Worker thread: run fn(org_chart) in the Org Chart tab kept open next to GOLD in the hidden
-        Firefox (opened on first use, about 10 s), then switch back to GOLD."""
+        Firefox (opened on first use, about 20 s), then switch back to GOLD. When the Org Chart wants a
+        sign-in that Windows does not do by itself, Firefox is shown for it (unless sign_in is False)."""
         w = self.worker
         w.ensure_browser()
-        d = w.driver
         oc = getattr(self, "_oc", None)
-        if oc is None or oc.d is not d or oc.handle not in d.window_handles:
+        if oc is None or oc.d is not w.driver or oc.handle not in w.driver.window_handles:
             self.log("Opening the Org Chart...")
-            oc = goc.OrgChart(d, cache_file=str(OC_CACHE), sign_in_wait=60, log=self.log)
             try:
-                oc.__enter__()
-            except Exception:
-                oc.__exit__(None, None, None)
-                raise
+                oc = self._org_open(w.driver, 90)
+            except goc.SignInNeeded:
+                if w.visible or not sign_in:
+                    raise
+                # Some PCs are not signed in to the Org Chart by Windows: show Firefox so the user can do it
+                self.log("The Org Chart needs you to sign in - opening the Firefox window. Sign in there "
+                         "(you have 5 minutes); GOLD Express carries on by itself.")
+                w.show_browser()
+                if not wait_for_gold(w.driver):
+                    raise RuntimeError("GOLD did not load. Sign in in the Firefox window, then try again.")
+                oc = self._org_open(w.driver, 300)
             self._oc = oc
+        d = oc.d
         try:
-            return fn(oc)
+            try:
+                return fn(oc)
+            except goc.SearchFailed:  # the tab's sign-in expired (it stays open for hours): a fresh tab, once
+                self.log("The Org Chart did not answer - opening it again...")
+                oc.__exit__(None, None, None)
+                self._oc = None
+                oc = self._oc = self._org_open(d, 90)
+                return fn(oc)
         finally:
-            back = oc.back if oc.back in d.window_handles else d.window_handles[0]
-            d.switch_to.window(back)
+            with suppress(Exception):
+                d.switch_to.window(oc.back if oc.back in d.window_handles else d.window_handles[0])
+
+    def _org_open(self, d, wait):
+        """Worker thread: a signed-in Org Chart tab in d (closed again if it does not open)."""
+        oc = goc.OrgChart(d, cache_file=str(OC_CACHE), sign_in_wait=wait, log=self.log)
+        try:
+            oc.__enter__()
+        except Exception:
+            oc.__exit__(None, None, None)
+            raise
+        return oc
 
     def _build_org_tab(self, f):
         bar = self._tile(f, pad=6, fill="x").body
