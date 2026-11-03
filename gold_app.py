@@ -4415,27 +4415,13 @@ class App(tk.Tk):
 
     def _org(self, fn, sign_in=True):
         """Worker thread: run fn(org_chart) in the Org Chart tab kept open next to GOLD in the hidden
-        Firefox (opened on first use, about 20 s), then switch back to GOLD. When the Org Chart wants a
-        sign-in that Windows does not do by itself, Firefox is shown for it (unless sign_in is False)."""
+        Firefox (opened on first use, about 20 s), then switch back to GOLD. When the Org Chart waits for the
+        user (a window to accept, a sign-in), Firefox is shown for it (unless sign_in is False)."""
         w = self.worker
         w.ensure_browser()
         oc = getattr(self, "_oc", None)
         if oc is None or oc.d is not w.driver or oc.handle not in w.driver.window_handles:
-            self.log("Opening the Org Chart...")
-            try:
-                oc = self._org_open(w.driver, 90)
-            except goc.SignInNeeded:
-                if w.visible or not sign_in:
-                    raise
-                # Some PCs are not signed in to the Org Chart by Windows: show Firefox so the user can do it
-                self.log("The Org Chart needs you to sign in - opening the Firefox window. Sign in there "
-                         "(you have 5 minutes); GOLD Express carries on by itself.")
-                w.show_browser()
-                if not wait_for_gold(w.driver):
-                    raise RuntimeError("GOLD did not load. Sign in in the Firefox window, then try again.")
-                oc = self._org_open(w.driver, 300)
-            self._oc = oc
-        d = oc.d
+            oc = self._oc = self._org_connect(sign_in)
         try:
             try:
                 return fn(oc)
@@ -4443,11 +4429,36 @@ class App(tk.Tk):
                 self.log("The Org Chart did not answer - opening it again...")
                 oc.__exit__(None, None, None)
                 self._oc = None
-                oc = self._oc = self._org_open(d, 90)
+                oc = self._oc = self._org_connect(sign_in)
                 return fn(oc)
         finally:
+            d = oc.d
             with suppress(Exception):
                 d.switch_to.window(oc.back if oc.back in d.window_handles else d.window_handles[0])
+
+    def _org_connect(self, sign_in):
+        """Worker thread: open a working Org Chart tab. Some accounts get a window to accept (or a sign-in) that
+        the hidden Firefox cannot show: then Firefox is shown on the Org Chart, and this carries on once its
+        search works."""
+        w = self.worker
+        self.log("Opening the Org Chart...")
+        try:
+            return self._org_open(w.driver, 300 if w.visible else 45)
+        except goc.SignInNeeded:
+            if w.visible or not sign_in:
+                raise
+        self.log("The Org Chart is waiting for you - opening the Firefox window...")
+        w.show_browser()
+        if not wait_for_gold(w.driver):
+            raise RuntimeError("GOLD did not load. Sign in in the Firefox window, then try again.")
+        self.ui(lambda: self._message(
+            APP_NAME, "Accept the Org Chart in Firefox",
+            "Firefox is open on the Org Chart. If it shows a window to accept, a sign-in or a security "
+            "warning, accept it or sign in there.\n\nGOLD Express carries on by itself as soon as the Org Chart "
+            "works (you have 5 minutes). Leave Firefox open."))
+        oc = self._org_open(w.driver, 300)
+        self.log("The Org Chart works now.")
+        return oc
 
     def _org_open(self, d, wait):
         """Worker thread: a signed-in Org Chart tab in d (closed again if it does not open)."""

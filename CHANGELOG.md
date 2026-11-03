@@ -1,5 +1,11 @@
 # GOLD Express - what's new
 
+## 2.21.4
+- **Org Chart: fixed for people who get a window to accept.** GOLD Express now waits until the Org Chart's
+  search really works, not just until the page appears. If it doesn't work within 45 seconds, Firefox opens on
+  the Org Chart with a message: accept the window (or sign in) there, and GOLD Express carries on by itself.
+  Before, the window could not be seen, and accepting it in your own browser did not help.
+
 ## 2.21.3
 - **My Orders shows the ITDD and the RTDD side by side** (instead of one Target date), so you can see whether
   the RTDD needs updating. The RTDD column says "No RTDD" when none is set and "Not checked" when it was not

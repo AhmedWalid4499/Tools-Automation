@@ -727,11 +727,14 @@ Every error path cancels the edit, because Manage Teams locks the order. "Alread
 - **Org Chart client** (`goc`): opens the Org Chart in a tab of the app's Firefox and calls its own endpoints
   from inside the signed-in page (with the page's CSRF token). `query()` accepts a name, email or CUID;
   `lookup()` caches results 7 days. `App._org(fn)` keeps one Org Chart tab and switches back to GOLD.
-- **When the Org Chart does not open** (`OrgChart._diagnose`):
-  - `goc.SignInNeeded`: Windows did not sign the user in. `_org` then restarts Firefox with its window
-    shown (`Worker.show_browser`) and waits 5 minutes for the user to sign in. With `sign_in=False` (the
-    automatic weekly sync) it raises instead of showing a window.
-  - Any other failure (certificate, network, no access, slow page) raises a `RuntimeError` that names it.
+- **When the Org Chart does not open.** It counts as open only when a test search works (`OrgChart._ready`).
+  Some accounts get a window to accept, and searches are refused until it is accepted. `_acknowledge` clicks
+  the usual buttons; when that is not enough after 45 s, `__enter__` raises `goc.SignInNeeded` (it says what
+  the tab shows, from `_diagnose`).
+  - `App._org_connect` then shows Firefox on the Org Chart (`Worker.show_browser`), with a message telling
+    the user to accept or sign in, and waits up to 5 minutes for the search to work.
+  - With `sign_in=False` (the automatic weekly DPM sync) it raises instead of showing a window.
+  - Only "site cannot be reached" (network/VPN) fails straight away.
 - **When the tab's sign-in expires** (the tab stays open for hours), searches answer 403, or the sign-in
   page in place of JSON. That raises `goc.SearchFailed`; `_org` closes the tab, opens a new one and runs
   `fn` once more.

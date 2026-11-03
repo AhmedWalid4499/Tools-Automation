@@ -117,18 +117,29 @@ class OrgChart:
         deadline = time.time() + self.sign_in_wait
         while time.time() < deadline:
             self._acknowledge()
-            with suppress(WebDriverException):
-                if urlparse(d.current_url).hostname == HOST and d.execute_script(
-                        "return typeof getCSRFToken === 'function' && typeof $ !== 'undefined'"):
-                    return self
-            time.sleep(1)  # an Orange sign-in page: the user completes it in the window
-        problem, sign_in = self._diagnose()
-        if sign_in:
-            raise SignInNeeded(f"The Org Chart needs you to sign in ({problem}).")
+            if self._ready():
+                return self
+            time.sleep(2)  # a sign-in page or a window to accept: done by itself, or by the user in the window
+        problem, needs_user = self._diagnose()
+        if needs_user:
+            raise SignInNeeded(f"The Org Chart is waiting for you ({problem}).")
         raise RuntimeError(f"The Org Chart did not open: {problem}.")
 
+    def _ready(self):
+        """On the Org Chart with its search working. The page alone is not enough: on some accounts it loads
+        behind a window to accept, and searches are refused until it is accepted."""
+        d = self.d
+        with suppress(WebDriverException):
+            if urlparse(d.current_url).hostname == HOST and d.execute_script(
+                    "return typeof getCSRFToken === 'function' && typeof $ !== 'undefined'"):
+                with suppress(SearchFailed):
+                    self._run(_SEARCH_JS, "", "", "", "ZZZZ9999", timeout=20)  # nobody has this CUID
+                    return True
+        return False
+
     def _diagnose(self):
-        """Why the tab is not on the Org Chart yet: (what it shows, whether the user has to sign in)."""
+        """Why the tab is not on a working Org Chart: (what it shows, whether the user can solve it in the
+        window: a sign-in, a window to accept, a certificate warning...)."""
         d = self.d
         try:
             url, title = d.current_url or "", d.title or ""
@@ -140,16 +151,16 @@ class OrgChart:
             return "the browser tab stopped responding", False
         host = urlparse(url).hostname or url
         # Firefox's error pages keep the site's address: tell them by their title
-        if url.startswith("about:certerror") or "security risk" in title.lower():
-            return "Firefox does not trust the site's certificate", False
         if url.startswith("about:neterror") or "problem loading page" in title.lower():
             return "the site cannot be reached - are you on the Orange network or VPN?", False
+        if url.startswith("about:certerror") or "security risk" in title.lower():
+            return "Firefox asks you to accept the site's certificate", True
         if re.search(r"access denied|not authori[sz]ed|forbidden|no access", text):
-            return f"your account has no access to it ({host})", False
+            return f"your account was refused on {host}", True
         if password or re.search(r"sign.?in|log.?in|password|authenticat", text + " " + title.lower()):
             return f"Orange sign-in page on {host}", True
         if host == HOST:
-            return "the page opened but did not finish loading (slow network?)", False
+            return "the page opened, but its search does not answer yet - accept any window it shows", True
         return f"it stopped on {host}" + (f" - {title}" if title else ""), True
 
     def __exit__(self, *exc):
@@ -167,7 +178,8 @@ class OrgChart:
         with suppress(WebDriverException):
             for el in self.d.find_elements(By.XPATH, "//button | //a[contains(@class,'btn')] | //input[@type='submit']"):
                 text = (el.text or el.get_attribute("value") or "").strip()
-                if el.is_displayed() and re.search(r"acknowledg|^i agree|^accept|^i understand", text, re.I):
+                if el.is_displayed() and re.search(r"acknowledg|agree|^accept|^i understand|^continue|^proceed|^ok$",
+                                                   text, re.I):
                     self.d.execute_script("arguments[0].click();", el)
                     time.sleep(1.5)
                     return
