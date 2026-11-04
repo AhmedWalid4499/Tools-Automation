@@ -132,16 +132,17 @@ def collect(driver, wait, order, log=print):
         return next((r for r in ms_rows if r["Title"].startswith(title)), {})
     initial = _d(ms("Initial Target Delivery Date").get("Target Date")) or \
         _d(_field(f, "Initial Target Delivery Date"))
-    rtdds = [r for r in ms_rows if r["Title"].startswith("Revised Target Date")]
-    current = ([r for r in rtdds if not r.get("Completed Date")] or rtdds or [{}])[-1]
+    current = gm.current_rtdd(ms_rows) or {}  # any RTDD milestone, the MHS one too
     revised = _d(current.get("Target Date"))
     revised_type = ("Customer reason" if "Customer" in current.get("Title", "") else
-                    "Orange Business Services reason" if current else "")
+                    "Orange Business Services reason" if "Revised Target Date - O" in current.get("Title", "")
+                    else "GOLD (MHS)" if current.get("Title", "").startswith("MHS") else
+                    "GOLD (System Delivery)" if current else "")
     key_date = revised or initial
     status_rag, days_left, rag_text = rag(key_date)
-    skip = ("Initial Target Delivery Date", "Revised Target Date", "Order Raised Date")
+    skip = ("Initial Target Delivery Date", "Order Raised Date")
     nxt = next((r for r in ms_rows if not r.get("Completed Date") and r.get("Target Date")
-                and not r["Title"].startswith(skip)), {})
+                and not r["Title"].startswith(skip) and not gm.is_rtdd(r)), {})
     raised = _d(ms("Order Raised Date").get("Completed Date"))
 
     # Site / address

@@ -664,8 +664,17 @@ order. These jobs are never retried automatically.
    - fills the "Create new" form (title `Revised Target Date - Customer Reason` or
      `- Orange Business Services Reason`, reason, date set through GOLD's own `copyToHelper` because the date
      boxes are read-only);
-   - **Test only:** cancels. **Real run:** saves, then **verifies** a new row with that date exists.
+   - **Test only:** cancels. **Real run:** saves, then **verifies** that one more RTDD row has that date.
+     GOLD may redraw the Milestones list a while after the form closes, so it re-reads the tab (via the
+     Information tab, `_reread`, about 20 s each) for up to `VERIFY_SECONDS` (120 s) before reporting it missing.
+     The error then warns against running it again (it may be saved, and a second run would add it twice).
 4. `gm.read_rtdd(driver, wait, order)` reads the current RTDD (used by My Orders).
+
+**What counts as an RTDD** (`gm.RTDD_TITLE`, `gm.is_rtdd`): the two titles the app adds, "Revised Target
+Delivery Date - O..." (added by GOLD's System Delivery) and "MHS - Revised Target Delivery Date" (from
+Nov 2026). The list shortens long titles. **The current RTDD** (`gm.current_rtdd`) is the last open one, else
+the latest completed one. GOLD completes the older ones when a new one comes, several on the same day, so ties
+go to the latest date. Overview uses the same rule.
 
 ### 11.6 Bulk assignment
 

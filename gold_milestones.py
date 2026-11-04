@@ -10,7 +10,7 @@ import re
 import time
 from datetime import date, datetime
 
-from selenium.common.exceptions import NoAlertPresentException
+from selenium.common.exceptions import NoAlertPresentException, UnexpectedAlertPresentException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
@@ -64,6 +64,10 @@ REASONS = {
         "Interface between tools failed TT created",
     ],
 }
+# Every milestone GOLD uses for a revised date: the two we add, "Revised Target Delivery Date - O..." (added by
+# GOLD's System Delivery) and "MHS - Revised Target Delivery Date" (from Nov 2026). The list shortens long titles.
+RTDD_TITLE = re.compile(r"^(MHS - )?Revised Target (Date|Delivery Date)\b", re.I)
+VERIFY_SECONDS = 120  # how long to look for a saved RTDD on the Milestones tab (GOLD may redraw it late)
 TARGET_HIDDEN = "targetDate_tgtX$Date"
 TARGET_HELPER = "targetDate_tgtX$DateHelper"
 
@@ -225,21 +229,6 @@ def open_create_form(driver, wait):
     time.sleep(0.4)
 
 
-def find_rtdd_rows(driver, wait, title):
-    """Milestones-tab rows whose Title is this RTDD title: [{Title, Target Date, ...}]."""
-    oo.open_tab(driver, wait, "Milestones")
-    out = []
-    for g in gx.extract_tab(driver)["grids"]:
-        if "Title" in g["columns"] and "Target Date" in g["columns"]:
-            for r in g["rows"]:
-                row = dict(zip(g["columns"], r))
-                # GOLD shortens long titles in the list ("Revised Target Date - Orange Bus...").
-                shown = row["Title"].rstrip(".")
-                if shown and title.startswith(shown):
-                    out.append(row)
-    return out
-
-
 class AlreadySet(Exception):
     """The order's current RTDD already has the chosen date: nothing was added."""
 
@@ -265,10 +254,34 @@ def milestone_rows(driver, wait):
     return rows
 
 
+def is_rtdd(row):
+    return bool(RTDD_TITLE.match(row.get("Title") or ""))
+
+
 def current_rtdd(rows):
-    """The order's current RTDD row (either type): the last open one, else the last one. None if none."""
-    rtdds = [r for r in rows if r["Title"].startswith("Revised Target Date")]
-    return ([r for r in rtdds if not r.get("Completed Date")] or rtdds or [None])[-1]
+    """The order's current RTDD row (any RTDD milestone): the last open one, else the last completed (GOLD
+    completes the older ones when a new one comes, several on the same day: then the latest date). None if none."""
+    rtdds = [r for r in rows if is_rtdd(r)]
+    open_rows = [r for r in rtdds if not r.get("Completed Date")]
+    if open_rows:
+        return open_rows[-1]
+    return max(rtdds, key=lambda r: (_date(r.get("Completed Date")) or date.min,
+                                     _date(r.get("Target Date")) or date.min), default=None)
+
+
+def _with_date(rows, target):
+    """How many RTDD rows have this Target Date (GOLD's DD-Mon-YYYY)."""
+    return sum(1 for r in rows if is_rtdd(r) and (r.get("Target Date") or "").strip().lower() == target.lower())
+
+
+def _reread(driver, wait):
+    """The Milestones tab read again from GOLD (via another tab, so the page really reloads)."""
+    try:
+        oo.open_tab(driver, wait, "Information")
+    except UnexpectedAlertPresentException:  # "you will lose changes": the milestone is already saved
+        _accept_alert(driver)
+        oo.open_tab(driver, wait, "Information")
+    return milestone_rows(driver, wait)
 
 
 def compare_date(driver, wait, rows):
@@ -323,7 +336,7 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
     if warning and not dry_run and not (confirm and confirm(order, warning)):
         oo.open_orders_tab(driver, wait, discard_changes=True)
         raise EarlierDate(f"{warning} - not set")
-    before = find_rtdd_rows(driver, wait, title)
+    before = _with_date(rows, target)
 
     open_create_form(driver, wait)
     Select(driver.find_element(By.ID, "title")).select_by_visible_text(title)
@@ -359,12 +372,17 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
         raise RuntimeError(f"GOLD refused: {alert.strip()}")
     Wait(driver, 60).until(EC.staleness_of(form))
 
-    # Verify: a new RTDD row with this target date is on the Milestones tab.
-    after = find_rtdd_rows(driver, wait, title)
-    new_rows = [r for r in after if r.get("Target Date") == target]
-    if len(after) <= len(before) or not new_rows:
-        raise RuntimeError("saved, but the new milestone is not visible on the Milestones tab - "
-                           "please check the order in GOLD")
+    # Verify: one more RTDD row with this target date on the Milestones tab. GOLD may redraw the list a while
+    # after the form closes, so look again until it shows (reading it once too early said "not visible").
+    deadline = time.time() + VERIFY_SECONDS
+    after = milestone_rows(driver, wait)
+    while _with_date(after, target) <= before:
+        if time.time() > deadline:
+            raise RuntimeError(f"GOLD took the save, but after {VERIFY_SECONDS} s the new RTDD ({target}) is still "
+                               "not on the order's Milestones tab - check the order in GOLD before running it "
+                               "again (it may be there, and a second run would add it twice)")
+        time.sleep(5)
+        after = _reread(driver, wait)
     # The milestone is saved (verified above), but GOLD's page still warns "You will lose
     # any changes" because the date box marked the order as modified. Nothing is pending,
     # so leave the order now, accepting that warning, ready for the next one.

@@ -1,5 +1,14 @@
 # GOLD Express - what's new
 
+## 2.21.5
+- **Revised Target Date: no more false "not visible on the Milestones tab" errors.** After saving, GOLD can
+  take a while to show the new milestone. GOLD Express now looks again for up to 2 minutes instead of once. If
+  it is still missing after that, the message asks you to check the order before running it again, so the RTDD
+  is not added twice.
+- **GOLD's new RTDD milestones are recognised:** "MHS - Revised Target Delivery Date" and "Revised Target
+  Delivery Date - O...". My Orders, Overview and the "already set" and "earlier date" checks now see the right
+  current RTDD (before, an order whose latest RTDD was an MHS one could show an older date).
+
 ## 2.21.4
 - **Org Chart: fixed for people who get a window to accept.** GOLD Express now waits until the Org Chart's
   search really works, not just until the page appears. If it doesn't work within 45 seconds, Firefox opens on
