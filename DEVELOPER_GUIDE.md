@@ -664,7 +664,12 @@ order. These jobs are never retried automatically.
    - fills the "Create new" form (title `Revised Target Date - Customer Reason` or
      `- Orange Business Services Reason`, reason, date set through GOLD's own `copyToHelper` because the date
      boxes are read-only);
-   - **Test only:** cancels. **Real run:** saves, then **verifies** that one more RTDD row has that date.
+   - **The reason (Description) is mandatory** since Nov 2026. Without it GOLD does not save: it shows the
+     form again, with "Please select description..." in its **left panel** under the menu, not as a pop-up.
+     `_rtdd_check` marks rows without a reason, and `add_rtdd` raises `ValueError` before opening anything.
+   - **Test only:** cancels. **Real run:** saves. If the form comes back after Save, GOLD refused: the app
+     cancels it and raises with GOLD's text (`gm.page_message`, which reads the whole page, left panel too).
+     Otherwise it **verifies** that one more RTDD row has that date.
      GOLD may redraw the Milestones list a while after the form closes, so it re-reads the tab (via the
      Information tab, `_reread`, about 20 s each) for up to `VERIFY_SECONDS` (120 s) before reporting it missing.
      The error then warns against running it again (it may be saved, and a second run would add it twice).

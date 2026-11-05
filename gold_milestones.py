@@ -3,8 +3,9 @@
 GOLD: order > Milestones > Create new > "Select or enter Milestone" =
   "Revised Target Date - Customer Reason"  or
   "Revised Target Date - Orange Business Services Reason"
-Target Date = the new date (GOLD format DD-Mon-YYYY, e.g. 06-Dec-2026). Description
-(the reason) is optional. Save = submitMilestone().
+Target Date = the new date (GOLD format DD-Mon-YYYY, e.g. 06-Dec-2026). Description (the reason) is
+mandatory since Nov 2026: without it GOLD shows the form again with a message in its left panel. Save =
+submitMilestone().
 """
 import re
 import time
@@ -23,7 +24,7 @@ RTDD_TITLES = {
     "Customer": "Revised Target Date - Customer Reason",
     "Orange": "Revised Target Date - Orange Business Services Reason",
 }
-# GOLD's Description (reason) choices per type, as read from GOLD (Oct 2026). Optional.
+# GOLD's Description (reason) choices per type, as read from GOLD (Oct 2026). Mandatory since Nov 2026.
 REASONS = {
     "Customer": [
         "Order Set On-Hold due to Customer HQ request", "Customer not accepting the order",
@@ -274,6 +275,22 @@ def _with_date(rows, target):
     return sum(1 for r in rows if is_rtdd(r) and (r.get("Target Date") or "").strip().lower() == target.lower())
 
 
+PAGE_ERROR = re.compile(r"error|exception|not allowed|cannot|can't|unable to|failed to|invalid|denied|"
+                        r"mandatory|is required|not permitted|please ", re.I)
+
+
+def page_message(driver):
+    """GOLD's error / warning text on the page, or "". GOLD shows some refusals there instead of a pop-up,
+    in the left panel under the menu (e.g. "Please select description to add Revised Target Date...")."""
+    try:
+        text = driver.execute_script("return document.body.innerText") or ""
+    except Exception:
+        return ""
+    lines = [" ".join(l.split()) for l in text.splitlines()]
+    lines = [l for l in lines if PAGE_ERROR.search(l) and len(l) < 400 and not l.startswith("* Mandatory")]
+    return " / ".join(dict.fromkeys(lines))[:500]
+
+
 def _reread(driver, wait):
     """The Milestones tab read again from GOLD (via another tab, so the page really reloads)."""
     try:
@@ -318,6 +335,8 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
     (see compare_date); without it, or on False, nothing is set (EarlierDate)."""
     title = RTDD_TITLES[kind]
     target = gold_date(new_date)
+    if not reason:
+        raise ValueError("GOLD needs a reason (Description) for a Revised Target Date - none was given")
 
     # Start each order from the search page. GOLD Express's Firefox is only used by the app and
     # every change is either saved+verified or cancelled, so a leftover 'you will lose
@@ -371,6 +390,14 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
     if alert:
         raise RuntimeError(f"GOLD refused: {alert.strip()}")
     Wait(driver, 60).until(EC.staleness_of(form))
+    if driver.find_elements(By.ID, "title"):  # the form is back: GOLD refused, with a message in its left panel
+        said = page_message(driver) or "no reason given"
+        with_cancel = driver.find_elements(By.CSS_SELECTOR, "img.butCancel")
+        if with_cancel:
+            with_cancel[0].click()
+        oo.open_orders_tab(driver, wait, discard_changes=True)
+        raise RuntimeError(f"GOLD did not add the RTDD - it says: {said}")
+    said = page_message(driver)
 
     # Verify: one more RTDD row with this target date on the Milestones tab. GOLD may redraw the list a while
     # after the form closes, so look again until it shows (reading it once too early said "not visible").
@@ -378,6 +405,8 @@ def add_rtdd(driver, wait, order, kind, new_date, reason="", dry_run=False, log=
     after = milestone_rows(driver, wait)
     while _with_date(after, target) <= before:
         if time.time() > deadline:
+            if said:
+                raise RuntimeError(f"GOLD did not add the RTDD - it says: {said}")
             raise RuntimeError(f"GOLD took the save, but after {VERIFY_SECONDS} s the new RTDD ({target}) is still "
                                "not on the order's Milestones tab - check the order in GOLD before running it "
                                "again (it may be there, and a second run would add it twice)")

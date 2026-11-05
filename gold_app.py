@@ -3733,7 +3733,7 @@ class App(tk.Tk):
         self._rtdd_kind_changed()
 
     def _rtdd_kind_changed(self):
-        reasons = [""] + gm.REASONS[self.rtdd_kind.get()]
+        reasons = [""] + gm.REASONS[self.rtdd_kind.get()]  # "" = none: each row then needs its own
         self.rtdd_reason_cb.configure(values=reasons)
         if self.rtdd_reason.get() not in reasons:
             self.rtdd_reason.set("")
@@ -3773,6 +3773,9 @@ class App(tk.Tk):
                     raise ValueError("no date")
                 dt = gm.parse_date(r["date"] or default_date)
                 reason = gm.match_reason(kind, r["reason"]) if r["reason"] else self.rtdd_reason.get()
+                if not reason:  # GOLD refuses an RTDD without its Description (since Nov 2026)
+                    raise ValueError("no reason - GOLD needs one (pick it in the Reason cell, or a default "
+                                     "reason above)")
                 if r["reason"] and reason != r["reason"]:
                     g.set_value(iid, "reason", reason)  # GOLD's exact wording
                 items.append((iid, (order, dt, reason), [order, gm.gold_date(dt), reason]))

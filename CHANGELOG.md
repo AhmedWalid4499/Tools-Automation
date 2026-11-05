@@ -1,5 +1,13 @@
 # GOLD Express - what's new
 
+## 2.21.6
+- **Revised Target Date works again: GOLD now requires a reason.** Since November, GOLD refuses an RTDD
+  without its Description (reason) and silently shows the form again, so nothing was created. Every row now
+  needs a reason, in its Reason cell or as the default reason above the table. Check marks rows without one
+  ("no reason - GOLD needs one").
+- **If GOLD refuses a save, you see why at once:** the app reads GOLD's message (also the one in its left
+  panel) and shows it, instead of waiting and saying the milestone is not visible.
+
 ## 2.21.5
 - **Revised Target Date: no more false "not visible on the Milestones tab" errors.** After saving, GOLD can
   take a while to show the new milestone. GOLD Express now looks again for up to 2 minutes instead of once. If
