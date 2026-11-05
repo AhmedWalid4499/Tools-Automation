@@ -666,7 +666,10 @@ order. These jobs are never retried automatically.
      boxes are read-only);
    - **The reason (Description) is mandatory** since Nov 2026. Without it GOLD does not save: it shows the
      form again, with "Please select description..." in its **left panel** under the menu, not as a pop-up.
-     `_rtdd_check` marks rows without a reason, and `add_rtdd` raises `ValueError` before opening anything.
+     Users often think "Customer reason" / "Orange Business Services reason" (the type) is the reason. So
+     `_rtdd_check` asks once, through `_rtdd_pick_reason`, for the reason of the rows that have none, offering
+     only that type's reasons. The choice becomes the default reason, and Cancel stops the run. `add_rtdd` still
+     raises `ValueError` for a blank reason. `gm.match_reason` says when a reason belongs to the other type.
    - **Test only:** cancels. **Real run:** saves. If the form comes back after Save, GOLD refused: the app
      cancels it and raises with GOLD's text (`gm.page_message`, which reads the whole page, left panel too).
      Otherwise it **verifies** that one more RTDD row has that date.

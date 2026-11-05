@@ -174,6 +174,9 @@ def match_reason(kind, text):
     for r in REASONS[kind]:
         if norm(r) == norm(text):
             return r
+    other = next((k for k in REASONS if k != kind and any(norm(r) == norm(text) for r in REASONS[k])), None)
+    if other:
+        raise ValueError(f"'{text}' is an {other} reason - choose {other} as the Reason type, or a {kind} reason")
     raise ValueError(f"'{text}' is not a {kind} reason in GOLD")
 
 
