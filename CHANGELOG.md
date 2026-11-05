@@ -1,11 +1,14 @@
 # GOLD Express - what's new
 
 ## 2.21.7
-- **Revised Target Date asks for the reason instead of failing.** Choosing "Customer reason" or "Orange
-  Business Services reason" is only the type; GOLD also needs the reason itself (e.g. "Customer not accepting
-  the order"). When rows have none, Check and Run update now open a short list of that type's reasons: pick
-  one, and it is used for those rows. The labels say "Reason (required)".
-- A reason of the other type (e.g. an Orange reason while Customer is chosen) now says which type to choose.
+- **Revised Target Date: one click on Customer or Orange is enough again.** GOLD now refuses an RTDD
+  without a Description, so the app asks for one, once per type. It remembers your choice, and from then on
+  choosing "Customer reason" or "Orange Business Services reason" uses it for every order. Change it in the
+  Description box above the table, or per row.
+- **Why this matters:** a refused save also closes the order's current RTDD in GOLD without adding the new
+  one. The app never sends an RTDD without a Description.
+- A Description of the other type (e.g. an Orange one while Customer is chosen) now says which type to
+  choose.
 
 ## 2.21.6
 - **Revised Target Date works again: GOLD now requires a reason.** Since November, GOLD refuses an RTDD

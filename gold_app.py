@@ -3706,10 +3706,11 @@ class App(tk.Tk):
         ttk.Label(dflt, text="Date").pack(side="left")
         self.rtdd_default = tk.StringVar()
         ttk.Entry(dflt, textvariable=self.rtdd_default, width=14).pack(side="left", padx=(4, 16))
-        ttk.Label(dflt, text="Reason (GOLD requires one)").pack(side="left")
+        ttk.Label(dflt, text="Description (GOLD requires one)").pack(side="left")
         self.rtdd_reason = tk.StringVar(value="")
         self.rtdd_reason_cb = ttk.Combobox(dflt, textvariable=self.rtdd_reason, state="readonly", width=62)
         self.rtdd_reason_cb.pack(side="left", padx=4)
+        self.rtdd_reason_cb.bind("<<ComboboxSelected>>", lambda e: self._rtdd_remember(self.rtdd_reason.get()))
 
         def norm_date(v):
             try:
@@ -3724,7 +3725,7 @@ class App(tk.Tk):
         self.rtdd_grid = EditGrid(f, [
             {"key": "order", "title": "Gold order", "width": 130},
             {"key": "date", "title": "Date", "width": 120, "normalize": norm_date},
-            {"key": "reason", "title": "Reason (required)", "width": 430, "stretch": True,
+            {"key": "reason", "title": "Description (required)", "width": 430, "stretch": True,
              "choices": lambda: gm.REASONS[self.rtdd_kind.get()]},
         ])
         self.rtdd_grid.pack(fill="both", expand=True)
@@ -3733,10 +3734,19 @@ class App(tk.Tk):
         self._rtdd_kind_changed()
 
     def _rtdd_kind_changed(self):
-        reasons = [""] + gm.REASONS[self.rtdd_kind.get()]  # "" = none: each row then needs its own
+        """Customer / Orange chosen: offer that type's Descriptions, and use the one remembered for it."""
+        kind = self.rtdd_kind.get()
+        reasons = [""] + gm.REASONS[kind]  # "" = none: each row then needs its own
         self.rtdd_reason_cb.configure(values=reasons)
-        if self.rtdd_reason.get() not in reasons:
-            self.rtdd_reason.set("")
+        remembered = (self.settings.get("rtdd_descriptions") or {}).get(kind, "")
+        self.rtdd_reason.set(remembered if remembered in reasons else "")
+
+    def _rtdd_remember(self, reason):
+        """Keep the Description chosen for the current type (Customer / Orange), so it is used from now on."""
+        saved = dict(self.settings.get("rtdd_descriptions") or {})
+        saved[self.rtdd_kind.get()] = reason
+        self.settings["rtdd_descriptions"] = saved
+        save_settings(self.settings)
 
     def _rtdd_check(self, only=None):
         """Validate the table (or only the rows in `only`); mark Ready or the problem.
@@ -3759,6 +3769,7 @@ class App(tk.Tk):
             if not reason:
                 return None
             self.rtdd_reason.set(reason)
+            self._rtdd_remember(reason)  # asked once per type: from now on the type button is enough
         items, seen, bad = [], set(), 0
         g.skipped = 0
         for iid, r in g.filled():
@@ -3782,8 +3793,7 @@ class App(tk.Tk):
                 dt = gm.parse_date(r["date"] or default_date)
                 reason = gm.match_reason(kind, r["reason"]) if r["reason"] else self.rtdd_reason.get()
                 if not reason:  # GOLD refuses an RTDD without its Description (since Nov 2026)
-                    raise ValueError("no reason - GOLD needs the reason itself, not only Customer / Orange "
-                                     "(pick it in the Reason cell)")
+                    raise ValueError("no Description - GOLD needs one (pick it in the Description cell)")
                 if r["reason"] and reason != r["reason"]:
                     g.set_value(iid, "reason", reason)  # GOLD's exact wording
                 items.append((iid, (order, dt, reason), [order, gm.gold_date(dt), reason]))
@@ -3800,11 +3810,11 @@ class App(tk.Tk):
     def _rtdd_pick_reason(self, kind, n):
         """Ask for the reason of the n rows without one (GOLD refuses an RTDD without it). Returns it or None."""
         label = "Customer reason" if kind == "Customer" else "Orange Business Services reason"
-        win, body = self._dialog("Choose the reason", width=560)
-        self._dialog_head(body, f"Which {label}?",
-                          f"GOLD needs the reason itself, not only “{label}”. {n} order(s) in the table have no "
-                          "reason: choose the one to use for them (you can also pick a different one per row in "
-                          "the Reason column).", "")
+        win, body = self._dialog("Choose the Description", width=560)
+        self._dialog_head(body, f"Description for “{label}”",
+                          f"GOLD now refuses a Revised Target Date without a Description. Choose the one to use "
+                          f"for {label} - it is remembered, so you only choose it once ({n} order(s) now). You "
+                          "can change it later in the Description box above the table, or per row.", "")
         choice = tk.StringVar()
         cb = ttk.Combobox(body, textvariable=choice, values=gm.REASONS[kind], state="readonly", width=70)
         cb.pack(fill="x", pady=(12, 0))
@@ -3815,7 +3825,7 @@ class App(tk.Tk):
             win.destroy()
         row = tk.Frame(body, background=CARD)
         row.pack(fill="x", pady=(16, 0))
-        use = ttk.Button(row, text="Use this reason", style="Accent.TButton", state="disabled",
+        use = ttk.Button(row, text="Use this Description", style="Accent.TButton", state="disabled",
                          command=lambda: pick(choice.get()))
         use.pack(side="right")
         ttk.Button(row, text="Cancel", command=lambda: pick(None)).pack(side="right", padx=(0, 8))
